@@ -1,0 +1,401 @@
+---
+title: "Estimando herdabilidade pra expressão de HLA"
+output: pdf_document
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      comment = '', tidy.opts = list(width.cutoff=60), tidy = TRUE)
+```
+
+Neste tutorial vamos utilizar os pacotes `GENESIS`, `SNPRelate` e pacotes associados para estimar herdabilidade da expressão de *HLA-A* em um subset de indivíduos europeus do Projeto 1000 Genomas, para os quais o consórcio Geuvadis realizou o sequenciamento de mRNA. Isso corresponde a 358 indivíduos das populações: Britânicos (GBR), Italianos da Toscana (TSI), Finandeses (FIN) e Mórmons de Utah (CEU).
+
+
+```{r pkgs}
+library(tidyverse)
+library(SeqArray) 
+library(SeqVarTools) 
+library(SNPRelate)
+library(Biobase) 
+library(GENESIS)
+```
+
+
+## Genótipos
+
+Vamos usar os genótipos disponíveis do Projeto 1000 Genomas. Previamente, com o uso do `bcftools`, eu processei o VCF original do cromossomo 6 para selecionar os 358 indivíduos do Geuvadis, e variantes com MAF>0.01 e sem dados faltantes.
+
+Vamos trabalhar com esse VCF no R, transformando-o para GDS (Genomic Data Structure).
+
+```{r vcf}
+vcf_file <- "./data/chr6_filtered_GRCh38_eurGeuvadis.vcf.gz"
+gds_file <- "./data/chr6_filtered_GRCh38_eurGeuvadis.gds"
+```
+
+```{r VcfToGds, eval=FALSE}
+seqVCF2GDS(vcf_file, gds_file, fmt.import = "GT", verbose = FALSE)
+```
+
+Podemos abrir o GDS no R, e explorar as variantes presentes, os genótipos, etc. Ao abrir com `seqOpen`, ainda não carregamos o dado na memória. Podemos fazer subset do dado com `seqSetFilter` para fazer uma exploração inicial.
+
+```{r gds}
+gds <- seqOpen(gds_file)
+
+seqSetFilter(gds, variant.id = 1:10, sample.id = seqGetData(gds, "sample.id")[1:10])
+
+variantInfo(gds)
+
+getGenotype(gds)
+```
+
+## Fenótipos
+
+Vamos usar os níveis de expressão do gene *HLA-A*, estimados com [HLApers](https://github.com/genevol-usp/HLApers). A unidade é TPM (Transcritos Por Milhão).
+
+Também temos covariáveis disponíveis a partir do 1000 Genomas (sexo, população) e do Geuvadis (laboratório onde foi realizado o RNA-seq). 
+
+
+```{r}
+hla <- read_tsv("./data/hlaA_expression.tsv")
+covars <- read_tsv("./data/covars_1000G.tsv")
+
+hla_df <- left_join(covars, hla, by = c("subject_id" = "sampleid")) %>%
+    select(subject_id, pop, sex, lab, expression = tpm)
+
+
+hla_df
+```
+
+É sempre bom inspecionar os dados por meio de visualizações. Aqui, olhamos para um boxplot de expressão por laboratório de sequenciamento. 
+
+Vemos que há diferenças na expressão de acordo com o laboratório de origem.
+
+```{r}
+ggplot(hla_df, aes(x = lab, y = expression)) +
+    geom_boxplot()
+```
+
+Também pode ser útil verificar as distribuições de acordo com a população e o sexo.
+
+
+```{r}
+ggplot(hla_df, aes(x = pop, y = expression, fill = sex)) +
+    geom_boxplot()
+```
+
+Aqui, deve-se avaliar se essas diferenças entre grupos são aceitáveis para uma análise do dado combinado, ou se podem ser tratadas com o uso de covariáveis.
+
+Para continuar para a análise de herdabilidade, precisamos transformar nosso `data.frame` do fenótipo num "Annotated data frame", uma estrutura fornecida pelo pacote `Biobase` que é somente nosso `hla_df` com metadados. Além disso, o `GENESIS`, que vamos usar para estimar herdabilidade, requer uma coluna `sample.id`. Como não temos múltiplas amostras de um mesmo indivíduo, vamos criar essa coluna apenas como uma cópia de `subject_id`.
+
+```{r annot_df}
+metadata <- data.frame(labelDescription = c("sample identifier", 
+                                            "subject identifier",
+                                            "subject's population",
+                                            "subject's sex",
+                                            "lab of RNA-seq",
+                                            "subject's HLA-A expression in TPM"))
+
+hla_annotdf <- hla_df %>%
+    mutate(sample.id = subject_id) %>%
+    select(sample.id, everything()) %>%
+    as.data.frame() %>%
+    AnnotatedDataFrame(metadata)
+
+# access the metadata with the varMetadata() function
+varMetadata(hla_annotdf)
+
+# access the data with the pData() function
+head(pData(hla_annotdf))
+```
+
+
+## "Fitando" o modelo nulo
+
+O primeiro passo para encontrar variantes genéticas associadas a um fenótipo é "fitar" um modelo nulo.
+
+"Fitamos" um modelo nulo que ajusta a expressão de *HLA-A* de acordo com covariáveis como sexo e laboratório de sequenciamento. Permitimos para variâncias residuais específicas por laboratório. 
+
+```{r mod1}
+mod_1 <- fitNullModel(hla_annotdf, outcome = "expression", covars = c("sex", "lab"), group.var = "lab")
+```
+
+O output de `fitNullModel` tem vários elementos:
+
+```{r}
+names(mod_1)
+```
+
+Confira se o modelo convergiu:
+
+```{r} 
+mod_1$converged
+```
+
+Efeitos fixos:
+
+```{r}
+mod_1$fixef
+```
+
+Boxplot dos resíduos:
+
+```{r}
+tibble(residuals = mod_1$resid.marginal) %>%
+    bind_cols(pData(hla_annotdf)) %>%
+    ggplot(aes(x = lab, y = residuals)) +
+    geom_boxplot()
+
+```
+
+Podemos ver que diferentes laboratórios tem variâncias residuais diferentes:
+
+```{r}
+mod_1$varComp
+```
+
+## Para avaliarmos:
+
+- O dado de diferentes laboratórios é homogêneo o suficiente para ser analisado conjuntamente?
+- Se não, quais as soluções? Trabalhar com o resíduo da `expressão ~ lab`?
+
+Para fins desse tutorial, vamos continuar com a análise sem tratar essa questão. Também vamos deixar de usar `group.var="lab"` como acima, pois modelos de herdabilidade assumem uma única variância residual por estudo.
+
+
+
+# Herdabilidade
+
+## Caso simples: GRM GCTA
+
+Usaremos o pacote `SNPRelate` para computar uma GRM. Vamos começar com o método GCTA.
+
+```{r}
+# Fechar e reabrir o GDS para garantir que não estamos com filtros aplicados
+gdsfmt::showfile.gds(closeall=TRUE)
+gds <- seqOpen(gds_file)
+
+# Selecionar SNPs 'pruned' por LD < 0.2
+set.seed(100)
+snpset <- snpgdsLDpruning(gds, 
+                          method = "corr", 
+                          ld.threshold = 0.2)
+
+pruned <- unlist(snpset, use.names = FALSE)
+
+# Computar a GRM
+grm_obj <- snpgdsGRM(gds, snp.id = pruned, method = "GCTA")
+
+# Precisamos extrair a matrix e nomear
+sample_ids <- seqGetData(gds, "sample.id")
+
+grm <- grm_obj$grm
+rownames(grm) <- sample_ids
+colnames(grm) <- sample_ids
+```
+
+A seguir contruimos nosso modelo nulo, incluindo a GRM:
+
+```{r nullmod}
+nullmod <- fitNullModel(hla_annotdf, 
+                        outcome = "expression", 
+                        covars = c("sex", "pop", "lab"),
+                        cov.mat = grm, verbose = FALSE)
+```
+
+Agora que temos um modelo nulo ajustando a expressão de *HLA-A* por sexo, população e laboratório de sequenciamento, e levando em conta a GRM entre indivíduos, podemos correr um teste de associação das variantes genéticas sobre expressão.
+
+O 1º passo é criar um objeto `SeqVarData` incluindo tanto o GDS (genótipos) e o Annotated data.frame (fenótipos). Isso é apenas um requerimento operacional dos pacotes que estamos usando.
+
+Aqui vamos usar a função `assocTestSingle` para testar o efeito de cada variante. Mas também poderíamos testar o efeito agregado, por exemplo para variantes raras, e também interação GxE.
+
+```{r}
+# criar o objeto SeqVarData e o iterador
+seqData <- SeqVarData(gds, sampleData = hla_annotdf)
+iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
+
+# teste
+assoc <- assocTestSingle(iterator, nullmod)
+
+head(assoc)
+```
+
+O `GENESIS` inclui a função `varCompCI` para computar a proporção da variância explicada (herdabilidade) por cada efeito aleatório, com intervalo de confiança 95%:
+
+```{r}
+varCompCI(nullmod, prop = TRUE)
+```
+
+
+
+## Caso mais sofisticado: GRM computada a partir de estimativas de kinship do KING corrigidas por estrutura populacional
+
+Uma alternativa mais complexa apresentada no SISG é destrinchar ancestralidade distante da relação familiar recente.
+
+### KING
+
+O passo 1 é obter estimativas iniciais de kinship com o KING.
+
+```{r king}
+king <- snpgdsIBDKING(gds, snp.id = pruned)
+
+king_mat <- king$kinship
+rownames(king_mat) <- colnames(king_mat) <- king$sample.id
+```
+
+Extraímos as estimativas de kinship e IBS0 par a par, para plotar:
+
+```{r}
+kinship <- snpgdsIBDSelection(king)
+
+head(kinship)
+```
+
+
+```{r}
+ggplot(kinship, aes(IBS0, kinship)) +
+    geom_hline(yintercept = 2^(-seq(3, 9, 2)/2), linetype = "dashed", color = "grey") + 
+    geom_point(alpha = 0.5) +
+    ylab("kinship estimate") +
+    theme_bw()
+```
+
+
+### PC-AIR
+
+O próximo passo é o PC-AiR, onde particionamos o dado em 2 conjuntos: indivíduos aparentados e indivíduos não-aparentados, de acordo com um limiar de kinship de 3, que corresponde a primos de 1º grau. 
+
+Vamos usar os não aparentados para PCA, e então projetar os aparentados nos PCs. Isso é feito com a função `pcair`.
+
+```{r}
+pca <- pcair(seqData,
+             kinobj = king_mat, 
+             kin.thresh = 2^(-9/2), 
+             divobj = king_mat, 
+             div.thresh = -2^(-9/2), 
+             snp.include = pruned, 
+             verbose = FALSE)
+
+pc_df <- as.data.frame(pca$vectors) %>%
+    rownames_to_column("sample.id") %>%
+    setNames(sub("^(V)", "PC", names(.))) %>%
+    left_join(pData(hla_annotdf)) %>%
+    select(sample.id, pop, starts_with("PC"))
+    
+ggplot(pc_df, aes(PC1, PC2, color = pop)) + 
+    geom_point()
+
+GGally::ggparcoord(pc_df, columns = 3:ncol(pc_df), 
+                  groupColumn = "pop", scale = "uniminmax") +
+    xlab("PC") + 
+    ylab("")
+```
+
+
+Como as populações são todas Européias e parecidas, podemos decidir usar o PC1 ou nenhum PC, pois o PCA não separa populações. Nesse exercício, vamos usar o PC1 para computar estimativas de kinship ajustando para ancestralidade distante.
+
+```{r}
+seqResetFilter(gds, verbose = FALSE) 
+seqData <- SeqVarData(gds) 
+seqSetFilter(seqData, variant.id = pruned)
+
+iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
+pcrel <- pcrelate(iterator, 
+                  pcs = pca$vectors[, 1, drop = FALSE], 
+                  training.set = pca$unrels)
+```
+
+
+Esse é um processo iterativo. Agora que temos estimativas de kinship ajustadas por ancestralidade, podemos usá-las para melhor ajustar por ancestralidade no PCA.
+
+Primeiro temos que criar uma matriz de kinship dos resultados do PCRelate. A matrix KING ainda é usada para divergência de ancestralidade.
+
+```{r}
+pcrel_mat <- pcrelateToMatrix(pcrel, scaleKin = 1, verbose = FALSE)
+
+seqResetFilter(seqData, verbose = FALSE)
+
+pca2 <- pcair(seqData,
+             kinobj = pcrel_mat, 
+             kin.thresh = 2^(-9/2), 
+             divobj = king_mat, 
+             div.thresh = -2^(-9/2), 
+             snp.include = pruned, 
+             verbose = FALSE)
+
+pc_df2 <- as.data.frame(pca2$vectors) %>%
+    rownames_to_column("sample.id") %>%
+    setNames(sub("^(V)", "PC", names(.))) %>%
+    left_join(pData(hla_annotdf)) %>%
+    select(sample.id, pop, starts_with("PC"))
+    
+ggplot(pc_df2, aes(PC1, PC2, color = pop)) + 
+    geom_point()
+```
+
+Agora usamos os PCs revisados para computar novas estimativas de kinship. Pode-se correr esse processo por múltiplas iterações, mas geralmente 2 são suficientes.
+
+```{r}
+seqSetFilter(seqData, variant.id = pruned)
+
+iterator <- SeqVarBlockIterator(seqData, verbose=FALSE)
+
+pcrel2 <- pcrelate(iterator, 
+                   pcs = pca2$vectors[, 1, drop = FALSE], 
+                   training.set = pca2$unrels)
+```
+
+Agora podemos ver que os valores para indivíduos menos aparentados se comportam melhor:
+
+```{r}
+kinship <- pcrel2$kinBtwn
+
+ggplot(kinship, aes(k0, kin)) +
+    geom_hline(yintercept = 2^(-seq(3, 9, 2)/2), 
+               linetype = "dashed", color = "grey") + 
+    geom_point(alpha = 0.5) +
+    ylab("kinship estimate") +
+    theme_bw()
+```
+
+### Calculando herdabilidade
+
+O primeiro passo, lembre-se, é "fitar" o modelo nulo. Vamos precisar do nosso Annotated data.frame com os fenótipos, os PCs como covariáveis, e as estimativas de kinship. Vamos usar 1 PC para ajudar pra ancestralidade.
+
+```{r}
+# Adicionar o PC1 à anotação
+pData(hla_annotdf) <- pData(hla_annotdf) %>%
+    left_join(select(pc_df2, sample.id, PC1), by = "sample.id")
+```
+
+Criamos uma matriz de kinship do output do PCRelate. Multiplicamos a matriz por 2 pra obter valores equivalentes a uma GRM.
+
+```{r}
+kinship <- pcrelateToMatrix(pcrel2, scaleKin = 2, verbose = FALSE)
+```
+
+Então "fitamos" o modelo nulo:
+
+```{r}
+nullmod <- fitNullModel(hla_annotdf, 
+                        outcome = "expression",
+                        covars = c("sex", "lab", "PC1"),
+                        cov.mat = kinship, 
+                        verbose = FALSE)
+```
+
+Corremos a associação:
+
+```{r}
+gdsfmt::showfile.gds(closeall = TRUE) 
+gds <- seqOpen(gds_file)
+
+seqData <- SeqVarData(gds, sampleData = hla_annotdf)
+iterator <- SeqVarBlockIterator(seqData, verbose = FALSE) 
+
+assoc <- assocTestSingle(iterator, nullmod)
+```
+Obtemos a herdabilidade:
+
+```{r}
+varCompCI(nullmod, prop = TRUE)
+```

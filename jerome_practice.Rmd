@@ -1,0 +1,193 @@
+---
+title: 'Practical 6: Quantitative genetics and heritability estimation'
+author: 'Jerome Goudet and Bruce Weir'
+date: '2020-07-24'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, comment = '')
+```
+
+```{r}
+library(gaston)
+library(hierfstat)
+library(JGTeach)
+```
+
+# Heritability of (simulated) traits from (simulated) panmictic populations
+
+1. We will use again the data we generated during the first practical, where we used `ms` to simulate data from a panmictic population. You may remember we simulated for 500 individuals 20 chromosomes 1 Megabase long.
+
+- Use function `JGTeach::make.traits` to simulate a trait with a heritability of 0.8, with 100 causal loci and using all possible SNPs as possible causal loci. Explore the structure of the object generated (you might also want to look at the function help page). Plot a histogram of the distribution of the trait you have generated. Plot the phenotypic value of the trait against its breeding value. Explain the difference between $h^2$ and $\hat{h^2}$.
+
+```{r}
+pan <- ms2bed("./data/pan.txt")
+
+#command issued to generate the data
+readLines("./data/pan.txt", n = 1L)
+
+t1 <- make.traits(pan, h2 = 0.8, n.causal = 100, minp = 0)
+
+str(t1)
+
+t1$h2hat
+hist(t1$trait$pheno)
+with(t1$trait, plot(BV, pheno))
+with(t1$trait, cor(BV, pheno)^2)
+```
+
+- Create a second trait with the same characteristics but a heritability of 0.3. Plot again breeding value against phenotype and explain the difference from the previous trait (it might be helpful to quantify the spread)
+
+```{r}
+t2 <- make.traits(pan, h2 = 0.3, n.causal = 100, minp = 0)
+t2$h2hat
+with(t2$trait, plot(BV, pheno))
+with(t2$trait, cor(BV, pheno))^2
+```
+
+Next we will use a linear mixed model to estimate the heritability of this trait. This requires a trait and a GRM. We will thus estimate heritability with the 3 GRMS we discussed this morning.
+
+2. Compute heritabilities for trait 1 and 2 using the 3 GRMs and function `gaston::lmm.aireml`. Are the heritability estimates from the 3 GRMS similar?
+
+
+```{r}
+#first compute the GRMs
+
+GRM.as.pan <- hierfstat::kinship2grm(hierfstat::beta.dosage(pan, inb = TRUE))
+
+GRM.c0.pan <- 2*(JGTeach::Kc0(pan))
+std.pan <- gaston::GRM(pan)
+
+#will extract heritability from an lmm.aireml object
+
+herit <- (function(x) x$tau / (x$tau + x$sigma2))
+
+#Trait 1
+
+## value to be estimated
+t1$h2hat
+
+## estimations
+herit(gaston::lmm.aireml(t1$trait$pheno, K = GRM.as.pan, verbose = FALSE))
+herit(gaston::lmm.aireml(t1$trait$pheno, K = GRM.c0.pan, verbose = FALSE))
+herit(gaston::lmm.aireml(t1$trait$pheno, K = std.pan, verbose = FALSE))
+
+# Trait 2
+
+## value to be estimated
+t2$h2hat
+
+## estimations
+herit(lmm.aireml(t2$trait$pheno, K = GRM.as.pan, verbose = FALSE))
+herit(lmm.aireml(t2$trait$pheno, K = GRM.c0.pan, verbose = FALSE))
+herit(lmm.aireml(t2$trait$pheno, K = std.pan, verbose = FALSE))
+```
+
+- A commonly seen recommendation for the standard GRM is to filter on low MAF. Re-estimate heritabilities using the standard GRM filtered on maf>0.05
+
+```{r}
+std.pan.maf05 <- GRM(pan[, pan@snps$maf >= 0.05])
+
+herit(lmm.aireml(t1$trait$pheno, K = std.pan.maf05, verbose = FALSE))
+herit(lmm.aireml(t2$trait$pheno, K = std.pan.maf05, verbose = FALSE))
+```
+
+- [optional] Evaluate heritabilities for other traits. Is there a pattern emerging?
+
+```{r}
+get.herit <- function(bed, h2 = 0.8, n.causal = 100, minp = 0, GRM = GRM, ...) {
+
+    herit <- function(x) x$tau / (x$tau + x$sigma2)
+    
+    tx <- make.traits(bed = bed, h2 = h2, n.causal = n.causal, minp = minp, ...)
+    est <- herit(lmm.aireml(Y = tx$trait$pheno, K = GRM, verbose = FALSE, ...))
+    c(tx$h2hat, est)           
+}
+
+
+#for h2=0.8
+
+h2.as <- replicate(20, get.herit(pan, GRM = GRM.as.pan))
+h2.c0 <- replicate(20, get.herit(pan, GRM = GRM.c0.pan))
+h2.std <- replicate(20, get.herit(pan, GRM = std.pan))
+h2.std.maf05 <- replicate(20, get.herit(pan, GRM = std.pan.maf05))
+
+boxplot(cbind(h2.as[2, ], h2.c0[2, ], h2.std[2, ], h2.std.maf05[2, ]))
+abline(h = 0.8)
+
+#for h2=0.3
+
+h2.as <- replicate(20, get.herit(pan, h2 = 0.3, GRM = GRM.as.pan))
+h2.c0 <- replicate(20, get.herit(pan, h2 = 0.3, GRM = GRM.c0.pan))
+h2.std <- replicate(20, get.herit(h2 = 0.3, pan, GRM = std.pan))
+h2.std.maf05 <- replicate(20, get.herit(h2 = 0.3, pan, GRM = std.pan.maf05))
+
+boxplot(cbind(h2.as[2, ], h2.c0[2, ], h2.std[2, ], h2.std.maf05[2, ]))
+abline(h = 0.3)
+
+boxplot(cbind(t(h2.as), t(h2.c0), t(h2.std), t(h2.std.maf05)))
+abline(h = 0.3)
+```
+
+# Heritability from simulated traits using (part of) 1000 genome data
+
+We can redo the same exercice this time using the subset if data we have been using since the begininng of this module. The difference from the simulated data is we have population structure, admixture etc in the data set. What will be the effect of these on heritability estimates?
+
+3. Simulate two traits, with heritabilities 0.8 and 0.3 respectively using the 1000 genomes data, and estimate their heritabilities using the 4 GRMS we used previously (Allele sharing As; c0; standard; and standard filter on $maf \ge 0.05$). Discuss the results and their shortcomings.
+
+```{r}
+ch22 <- read.VCF("./data/chr22_Mb0_20.recode.vcf.gz")
+ch22.M <- readRDS("./data/matching.ch22.RDS")
+Mb <- mean(mat2vec(ch22.M))
+
+ch22.Kas <- (ch22.M-Mb)/(1-Mb)
+ch22.Kc0 <- JGTeach::Kc0(ch22.M, matching = TRUE)
+ch22.std.GRM <- gaston::GRM(ch22)
+ch22.std.GRM.maf05 <- gaston::GRM(ch22[, ch22@snps$maf >= 0.05])
+
+t1 <- make.traits(ch22, n.causal = 100, h2 = 0.8, minp = 0)
+t2 <- make.traits(ch22, n.causal = 100, h2 = 0.3, minp = 0)
+
+t1$h2hat
+
+herit(lmm.aireml(t1$trait$pheno, K = 2*ch22.Kas, verbose = FALSE))
+herit(lmm.aireml(t1$trait$pheno, K = 2*ch22.Kc0, verbose = FALSE))
+herit(lmm.aireml(t1$trait$pheno, K = ch22.std.GRM, verbose = FALSE))
+herit(lmm.aireml(t1$trait$pheno, K = ch22.std.GRM.maf05, verbose = FALSE))
+
+# Trait 2
+
+t2$h2hat
+
+herit(lmm.aireml(t2$trait$pheno, K = 2*ch22.Kas, verbose = FALSE))
+herit(lmm.aireml(t2$trait$pheno, K = 2*ch22.Kc0, verbose = FALSE))
+herit(lmm.aireml(t2$trait$pheno, K = ch22.std.GRM, verbose = FALSE))
+herit(lmm.aireml(t2$trait$pheno,K = ch22.std.GRM.maf05, verbose = FALSE))
+```
+
+- Are estimates of heritability impacted by population structure?
+
+- [optional] Evaluate heritabilities for other traits. Is there a pattern emerging?
+
+```{r}
+#for h2=0.8
+
+h2.as <- replicate(20, get.herit(ch22, h2 = 0.8, GRM = 2*ch22.Kas))
+h2.c0 <- replicate(20, get.herit(ch22, h2 = 0.8, GRM = 2*ch22.Kc0))
+h2.std <- replicate(20, get.herit(ch22, h2 = 0.8, GRM = ch22.std.GRM))
+h2.std.maf05 <- replicate(20, get.herit(ch22, h2 = 0.8, GRM = ch22.std.GRM.maf05))
+
+boxplot(cbind(h2.as[2, ], h2.c0[2, ], h2.std[2, ], h2.std.maf05[2, ]))
+abline(h = 0.8)
+
+#for h2=0.3
+
+h2.as <- replicate(20, get.herit(ch22, h2 = 0.3, GRM = 2*ch22.Kas))
+h2.c0 <- replicate(20, get.herit(ch22, h2 = 0.3, GRM = 2*ch22.Kc0))
+h2.std <- replicate(20, get.herit(ch22, h2 = 0.3, GRM = ch22.std.GRM))
+h2.std.maf05 <- replicate(20, get.herit(ch22, h2 = 0.3, GRM = ch22.std.GRM.maf05))
+
+boxplot(cbind(h2.as[2, ], h2.c0[2, ], h2.std[2, ], h2.std.maf05[2, ]))
+abline(h = 0.3)
+```
