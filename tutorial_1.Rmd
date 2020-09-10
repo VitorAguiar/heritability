@@ -1,12 +1,10 @@
 ---
-title: "Prática Herdabilidade"
-output: pdf_document
-fontsize: 12pt
+title: "Prática Herdabilidade: dados simulados"
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, 
-		      comment = '', tidy.opts=list(width.cutoff=60), tidy=TRUE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
 O material abaixo se refere à aula de Jerome Goudet e Bruce Weir no Summer Institutes in Statistical Genetics 2020.
