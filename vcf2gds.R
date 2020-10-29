@@ -1,5 +1,4 @@
 library(SeqArray)
-library(SNPRelate)
 
 chr <- commandArgs(TRUE)[1]
 
