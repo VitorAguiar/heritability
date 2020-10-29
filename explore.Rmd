@@ -1,0 +1,130 @@
+---
+title: "Exploratory data analysis"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, 
+                      message = FALSE, comment = '',
+                      engine.opts = list(bash = "-l"))
+```
+
+## 1. VCF processing
+
+### Subset and filtering
+
+Here we select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
+
+Next we call an R script that converts VCF to GDS.
+
+```{bash, echo=FALSE}
+cat launch_processVCF.sh
+```
+
+The content of the vcf2gds.R script is the following:
+
+```{bash, echo=FALSE}
+cat vcf2gds.R
+```
+
+## Analyses in R
+
+### Packages:
+
+```{r pkgs}
+library(tidyverse)
+library(SeqArray) 
+library(SeqVarTools) 
+library(SNPRelate)
+library(Biobase) 
+library(GENESIS)
+```
+
+
+### Concatenate GDS files for all chromosomes
+
+```{r VcfToGds, eval=FALSE}
+gds_file <- "./data/kgp/allchrs.gds"
+
+gds_list <- sprintf("./data/kgp/chr%d.gds", 1:22)
+
+seqMerge(gds_list, gds_file)
+```
+
+### Pruning
+```{r, eval=FALSE}
+# this step takes hours
+gds <- seqOpen(gds_file)
+
+set.seed(100)
+pruned <- snpgdsLDpruning(gds, 
+                          method = "corr", 
+                          ld.threshold = sqrt(0.1))
+
+prunedsnps <- unlist(pruned, use.names = FALSE)
+
+seqSetFilter(gds, variant.id = prunedsnps)
+seqExport(gds, "./data/kgp/allchrs_pruned.gds")
+seqClose(gds)
+```
+
+
+### PCA on genotype data
+
+```{r}
+gds <- seqOpen("./data/kgp/allchrs_pruned.gds")
+pca <- snpgdsPCA(gds)
+
+pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
+    select(sampleid = 1, 2:3)
+
+pcadf <- as.data.frame(pca$eigenvect) %>%
+    as_tibble() %>%
+    add_column(sampleid = pca$sample.id, .before = 1) %>%
+    inner_join(pops, ., by = "sampleid")
+
+ggplot(pcadf, aes(V1, V2, color = population)) +
+    geom_point()
+```
+
+### Kinship
+
+We use the KING algorithm to obtain kinship estimates. KING is robust to population structure but not admixture.
+
+```{r}
+king <- snpgdsIBDKING(gds)
+
+kinship <- snpgdsIBDSelection(king) %>%
+    left_join(distinct(select(pops, 1, pop1 = 2)), 
+              by = c("ID1" = "sampleid")) %>%
+    left_join(distinct(select(pops, 1, pop2 = 2)), 
+              by = c("ID2" = "sampleid")) %>%
+    mutate(POP1 = pmin(pop1, pop2),
+           POP2 = pmax(pop1, pop2)) %>%
+    select(ID1, ID2, IBS0, kinship, POP1, POP2) %>%
+    unite(pop_pair, c("POP1", "POP2"), sep = "-")
+```
+
+We plot the pairwise estimates. KING kinship estimates are negative for samples with different ancestry. 
+
+Dashed lines correspond to the kinship thresholds for different degrees of relatedness: full siblings, 2nd degree relatives, and first cousins.
+
+
+```{r, eval=FALSE}
+ggplot(kinship, aes(IBS0, kinship, color = pop_pair)) +
+    geom_hline(yintercept = c(1/(2^(5/2)), 1/(2^(7/2)), 1/(2^(9/2))),
+               linetype = "dashed", color = "grey") +
+    geom_point(alpha = 0.5) +
+    ylab("kinship estimate") +
+    theme_bw()
+```
+
+\*Obs: these values have a better behavior when we account for population structure (PCs) in the kinship estimation (see tutorial 2).
+
+
+```{r}
+ggplot(kinship, aes(kinship, pop_pair)) +
+    ggridges::geom_density_ridges() +
+    labs(y = NULL, title = "Density of kinship values per population pair")
+```
+

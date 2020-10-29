@@ -180,12 +180,14 @@ Usaremos o pacote `SNPRelate` para computar uma GRM. Vamos começar com o métod
 ```{r}
 # Fechar e reabrir o GDS para garantir que não estamos com filtros aplicados
 gdsfmt::showfile.gds(closeall = TRUE)
-
 gds <- seqOpen(gds_file)
+
+sample.id <- readLines("./data/samples_subset100.txt")
 
 # Selecionar SNPs 'pruned' por LD < 0.3
 set.seed(100)
 snpset <- snpgdsLDpruning(gds, 
+                          sample.id = sample.id,
                           method = "corr", 
                           slide.max.bp = 10e6,
                           ld.threshold = sqrt(0.1))
@@ -193,7 +195,9 @@ snpset <- snpgdsLDpruning(gds,
 pruned <- unlist(snpset, use.names = FALSE)
 
 # Computar a GRM
-grm_obj <- snpgdsGRM(gds, snp.id = pruned, method = "GCTA")
+grm_obj <- snpgdsGRM(gds, 
+                     snp.id = pruned, 
+                     method = "GCTA")
 
 # Precisamos extrair a matrix e nomear
 sample_ids <- seqGetData(gds, "sample.id")
@@ -223,10 +227,11 @@ Aqui vamos usar a função `assocTestSingle` para testar o efeito de cada varian
 # ordernar os indivíduos no df de fenótipos de acordo com a ordem nos genótipos
 
 pData(annotphen) <- pData(annotphen) %>%
-    mutate(subject_id = factor(subject_id, levels = seqGetData(gds, "sample.id"))) %>%
+    mutate(subject_id = factor(subject_id, levels = sample_ids)) %>%
     arrange(subject_id)
 
 # criar o objeto SeqVarData e o iterador
+seqResetFilter(gds, verbose=FALSE)
 seqData <- SeqVarData(gds, sampleData = annotphen)
 iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
 
@@ -253,7 +258,9 @@ Uma alternativa mais complexa apresentada no SISG é destrinchar ancestralidade 
 O passo 1 é obter estimativas iniciais de kinship com o KING.
 
 ```{r king}
-king <- snpgdsIBDKING(gds, snp.id = pruned)
+king <- snpgdsIBDKING(gds,
+                      sample.id = sample.id,
+                      snp.id = pruned)
 
 kingmat <- king$kinship
 rownames(kingmat) <- colnames(kingmat) <- king$sample.id
@@ -289,6 +296,7 @@ pca <- pcair(seqData,
              kin.thresh = 2^(-9/2), 
              divobj = kingmat, 
              div.thresh = -2^(-9/2), 
+             sample.include = sample.id,
              snp.include = pruned, 
              verbose = FALSE)
 
@@ -323,7 +331,8 @@ seqSetFilter(seqData, variant.id = pruned)
 
 iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
 pcrel <- pcrelate(iterator, 
-                  pcs = pca$vectors[, 1:4], 
+                  pcs = pca$vectors[, 1:4],
+                  sample.include = sample.id,
                   training.set = pca$unrels)
 ```
 
@@ -342,6 +351,7 @@ pca2 <- pcair(seqData,
               kin.thresh = 2^(-9/2), 
               divobj = kingmat, 
               div.thresh = -2^(-9/2), 
+              sample.include = sample.id,
               snp.include = pruned, 
               verbose = FALSE)
 
@@ -364,6 +374,7 @@ iterator <- SeqVarBlockIterator(seqData, verbose=FALSE)
 
 pcrel2 <- pcrelate(iterator, 
                    pcs = pca2$vectors[, 1:2], 
+                   sample.include = sample.id,
                    training.set = pca2$unrels)
 ```
 
@@ -387,7 +398,7 @@ O primeiro passo, lembre-se, é "fitar" o modelo nulo. Vamos precisar do nosso A
 ```{r}
 # Adicionar os PCs à anotação
 pData(annotphen) <- pData(annotphen) %>%
-    left_join(select(pc_df2, sample.id, PC1:PC4), by = "sample.id")
+    inner_join(select(pc_df2, sample.id, PC1:PC4), by = "sample.id")
 ```
 
 Criamos uma matriz de kinship do output do PCRelate. Multiplicamos a matriz por 2 pra obter valores equivalentes a uma GRM.
