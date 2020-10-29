@@ -1,6 +1,6 @@
 ---
 title: "Exploratory data analysis"
-output: pdf_document
+output: github_document
 ---
 
 ```{r setup, include=FALSE}
@@ -110,7 +110,7 @@ We plot the pairwise estimates. KING kinship estimates are negative for samples 
 Dashed lines correspond to the kinship thresholds for different degrees of relatedness: full siblings, 2nd degree relatives, and first cousins.
 
 
-```{r, eval=FALSE}
+```{r}
 ggplot(kinship, aes(IBS0, kinship, color = pop_pair)) +
     geom_hline(yintercept = c(1/(2^(5/2)), 1/(2^(7/2)), 1/(2^(9/2))),
                linetype = "dashed", color = "grey") +
