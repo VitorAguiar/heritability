@@ -9,6 +9,12 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE,
                       engine.opts = list(bash = "-l"))
 ```
 
+## Sample:
+
+- 445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
+
+
+
 ## 1. VCF processing
 
 ### Subset and filtering
@@ -17,14 +23,14 @@ Here we select the GEUVADIS individuals, and exclude variants with missing data 
 
 Next we call an R script that converts VCF to GDS.
 
-```{bash, echo=FALSE}
-cat launch_processVCF.sh
+
+```{bash, eval=FALSE, code = readLines("launch_processVCF.sh")}
+
 ```
 
 The content of the vcf2gds.R script is the following:
 
-```{bash, echo=FALSE}
-cat vcf2gds.R
+```{r, eval=FALSE, code = readLines("vcf2gds.R")}
 ```
 
 ## Analyses in R
@@ -36,8 +42,6 @@ library(tidyverse)
 library(SeqArray) 
 library(SeqVarTools) 
 library(SNPRelate)
-library(Biobase) 
-library(GENESIS)
 ```
 
 
@@ -95,14 +99,9 @@ We use the KING algorithm to obtain kinship estimates. KING is robust to populat
 king <- snpgdsIBDKING(gds)
 
 kinship <- snpgdsIBDSelection(king) %>%
-    left_join(distinct(select(pops, 1, pop1 = 2)), 
-              by = c("ID1" = "sampleid")) %>%
-    left_join(distinct(select(pops, 1, pop2 = 2)), 
-              by = c("ID2" = "sampleid")) %>%
-    mutate(POP1 = pmin(pop1, pop2),
-           POP2 = pmax(pop1, pop2)) %>%
-    select(ID1, ID2, IBS0, kinship, POP1, POP2) %>%
-    unite(pop_pair, c("POP1", "POP2"), sep = "-")
+    left_join(distinct(select(pops, 1, pop1 = 2)), by = c("ID1" = "sampleid")) %>%
+    left_join(distinct(select(pops, 1, pop2 = 2)), by = c("ID2" = "sampleid")) %>%
+    mutate(pop_pair = paste(pmin(pop1, pop2), pmax(pop1, pop2), sep = "-"))
 ```
 
 We plot the pairwise estimates. KING kinship estimates are negative for samples with different ancestry. 
