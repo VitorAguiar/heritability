@@ -52,9 +52,9 @@ library(ggbeeswarm)
 ### Concatenate GDS files for all chromosomes
 
 ```{r VcfToGds, eval=FALSE}
-gds_file <- "./data/kgp/allchrs.gds"
+gds_file <- "/home/vitor/heritability/data/kgp/allchrs.gds"
 
-gds_list <- sprintf("./data/kgp/chr%d.gds", 1:22)
+gds_list <- sprintf("/home/vitor/heritability/data/kgp/chr%d.gds", 1:22)
 
 seqMerge(gds_list, gds_file)
 ```
@@ -72,20 +72,23 @@ pruned <- snpgdsLDpruning(gds,
 prunedsnps <- unlist(pruned, use.names = FALSE)
 
 seqSetFilter(gds, variant.id = prunedsnps)
-seqExport(gds, "./data/kgp/allchrs_pruned.gds")
+seqExport(gds, "/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
 seqClose(gds)
 ```
 
 
 ### PCA on genotype data
 
-```{r, cache=TRUE}
-gds <- seqOpen("./data/kgp/allchrs_pruned.gds")
+```{r}
+# Close GDS and open the pruned one
+gdsfmt::showfile.gds(closeall = TRUE)
 
-pca <- snpgdsPCA(gds)
+gds <- seqOpen("/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+
+pca <- snpgdsPCA(gds, num.thread = 16L)
 
 pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
-    distinct(subject_id, population) %>%
+    distinct(subject_id, pop) %>%
     rename(sampleid = subject_id)
 
 pcadf <- as.data.frame(pca$eigenvect) %>%
@@ -95,17 +98,17 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
 ```
 
 ```{r pcaplot}
-p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
+p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
     geom_point() +
     scale_color_viridis_d() +
     theme_bw()
 
-p2 <- ggplot(pcadf, aes(V2, V3, color = population)) +
+p2 <- ggplot(pcadf, aes(V2, V3, color = pop)) +
     geom_point() +
     scale_color_viridis_d() +
     theme_bw()
 
-p3 <- ggplot(pcadf, aes(V3, V4, color = population)) +
+p3 <- ggplot(pcadf, aes(V3, V4, color = pop)) +
     geom_point() +
     scale_color_viridis_d() +
     theme_bw()
@@ -118,7 +121,8 @@ plot_grid(p1 + theme(legend.position = "none"),
           p3 + theme(legend.position = "none"),
           nrow = 2)
 ```
-### Phenotypes (HLA-A expression)
+
+### Phenotypes (HLA-A expression in Geuvadis)
 
 ```{r}
 hla_expression <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
@@ -227,7 +231,7 @@ We will use the `SNPRelate` package to compute a GRM. We will begin with the GCT
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
 
-pruned <- seqOpen("./data/kgp/allchrs_pruned.gds")
+pruned <- seqOpen("/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
 
 # Computar a GRM
 grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
@@ -247,10 +251,10 @@ grm[1:5, 1:5]
 
 Then, we build a new NULL model, now including the GRM.
 
-```{r}
+```{r eval=FALSE}
 mod_null <- fitNullModel(annotphen, 
                          outcome = "tpm", 
-                         covars = c("pop", "sex", "lab", "V1", "V2", "V3"),
+                         covars = c("lab", "sex", "pop", "V1", "V2", "V3"),
                          cov.mat = grm)
 ```
 
@@ -260,7 +264,7 @@ The first step is to create a `SeqVarData` object including both the GDS (genoty
 
 Then we will use the `assocTestSingle` function to assess the effect of each variant.
 
-```{r}
+```{r eval=FALSE}
 # order individuals according to GDS
 pData(annotphen) <- pData(annotphen) %>%
     mutate(subject_id = factor(subject_id, levels = seqGetData(pruned, "sample.id"))) %>%
@@ -279,6 +283,6 @@ head(assoc)
 
 `GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
 
-```{r}
+```{r eval=FALSE}
 varCompCI(nullmod, prop = TRUE)
 ```
