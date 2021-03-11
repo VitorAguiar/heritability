@@ -1,0 +1,284 @@
+---
+title: "Exploratory data analysis"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, 
+                      message = FALSE, comment = '',
+                      engine.opts = list(bash = "-l"))
+```
+
+## Sample:
+
+- 445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
+
+
+
+## 1. VCF processing
+
+### Subset and filtering
+
+Here we select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
+
+Next we call an R script that converts VCF to GDS.
+
+
+```{bash, eval=FALSE, code = readLines("launch_processVCF.sh")}
+
+```
+
+The content of the vcf2gds.R script is the following:
+
+```{r, eval=FALSE, code = readLines("vcf2gds.R")}
+```
+
+## Analyses in R
+
+### Packages:
+
+```{r pkgs}
+library(tidyverse)
+library(SeqArray) 
+library(SeqVarTools) 
+library(SNPRelate)
+library(GENESIS)
+library(Biobase)
+library(cowplot)
+library(ggbeeswarm)
+```
+
+
+### Concatenate GDS files for all chromosomes
+
+```{r VcfToGds, eval=FALSE}
+gds_file <- "./data/kgp/allchrs.gds"
+
+gds_list <- sprintf("./data/kgp/chr%d.gds", 1:22)
+
+seqMerge(gds_list, gds_file)
+```
+
+### Pruning
+```{r, eval=FALSE}
+# this step takes hours
+gds <- seqOpen(gds_file)
+
+set.seed(100)
+pruned <- snpgdsLDpruning(gds, 
+                          method = "corr", 
+                          ld.threshold = sqrt(0.1))
+
+prunedsnps <- unlist(pruned, use.names = FALSE)
+
+seqSetFilter(gds, variant.id = prunedsnps)
+seqExport(gds, "./data/kgp/allchrs_pruned.gds")
+seqClose(gds)
+```
+
+
+### PCA on genotype data
+
+```{r, cache=TRUE}
+gds <- seqOpen("./data/kgp/allchrs_pruned.gds")
+
+pca <- snpgdsPCA(gds)
+
+pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
+    distinct(subject_id, population) %>%
+    rename(sampleid = subject_id)
+
+pcadf <- as.data.frame(pca$eigenvect) %>%
+    as_tibble() %>%
+    add_column(sampleid = pca$sample.id, .before = 1) %>%
+    inner_join(pops, ., by = "sampleid")
+```
+
+```{r pcaplot}
+p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
+    geom_point() +
+    scale_color_viridis_d() +
+    theme_bw()
+
+p2 <- ggplot(pcadf, aes(V2, V3, color = population)) +
+    geom_point() +
+    scale_color_viridis_d() +
+    theme_bw()
+
+p3 <- ggplot(pcadf, aes(V3, V4, color = population)) +
+    geom_point() +
+    scale_color_viridis_d() +
+    theme_bw()
+
+p_legend <- get_legend(p1)
+
+plot_grid(p1 + theme(legend.position = "none"), 
+          p_legend,
+          p2 + theme(legend.position = "none"), 
+          p3 + theme(legend.position = "none"),
+          nrow = 2)
+```
+### Phenotypes (HLA-A expression)
+
+```{r}
+hla_expression <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
+    filter(gene_name == "HLA-A", subject_id %in% seqGetData(gds, "sample.id")) 
+```
+
+### Expression across populations
+
+```{r}
+ggplot(hla_expression, aes(reorder(pop, tpm), tpm)) +
+    geom_quasirandom(aes(color = pop), method = "smiley") +
+    geom_boxplot(fill = NA, outlier.color = NA) +
+    scale_color_viridis_d() +
+    theme_bw() +
+    labs(x = NULL, y = "TPM")
+```
+
+### Expression across laboratories
+
+```{r}
+ggplot(hla_expression, aes(reorder(lab, tpm), tpm)) +
+    geom_quasirandom(aes(color = lab), method = "smiley") +
+    geom_boxplot(fill = NA, outlier.color = NA) +
+    theme_bw() +
+    labs(x = NULL, y = "TPM")
+```
+
+### Expression between sexes
+
+```{r}
+ggplot(hla_expression, aes(reorder(sex, tpm), tpm)) +
+    geom_quasirandom(aes(color = sex), method = "smiley") +
+    geom_boxplot(fill = NA, outlier.color = NA) +
+    theme_bw() +
+    labs(x = NULL, y = "TPM")
+```
+
+Here we got to evaluate whether such differences across groupings are adequate for an analysis with the combined dataset, or whether they can be accounted for by using covariates.
+
+Before we continue, we need to transform our phenotype data.frame into an "Annotated data frame", which is a data structure provided by `Biobase`. This means that we have to add metadata to our `hla_expression` data.frame, and include a `sample.id` column as a requirement for `GENESIS`. Since we do not have multiple samples for the same individuals, we will just create the `sample.id` column as a copy of `subject_id`.
+
+
+```{r}
+metadata <- 
+    data.frame(labelDescription = c("sample identifier",
+                                    "subject identifier",
+                                    "laboratory of RNA sequencing",
+                                    "subject's sex",
+                                    "subject's population",
+                                    "PC 1",
+                                    "PC 2",
+                                    "PC 3",
+                                    "expression levels in TPM"))
+
+annotphen <- hla_expression %>%
+    mutate(sample.id = subject_id) %>%
+    left_join(select(pcadf, sampleid, V1:V3), 
+              by = c("subject_id" = "sampleid")) %>%
+    select(sample.id, subject_id, lab, sex, pop, V1, V2, V3, tpm) %>%
+    as.data.frame() %>%
+    AnnotatedDataFrame(metadata)
+
+# access the metadata with the varMetadata() function
+varMetadata(annotphen)
+
+# access the data with the pData() function
+head(pData(annotphen))
+```
+
+## Fitting the NULL model
+
+The first step in finding genetic variants which are associated with a phenotype is preparing null model.
+
+We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. 
+
+```{r}
+mod_0 <- fitNullModel(annotphen, 
+                      outcome = "tpm", 
+                      covars = c("pop", "sex", "lab", "V1", "V2", "V3"))
+```
+
+O output de fitNullModel tem vários elementos:
+
+```{r}
+names(mod_0)
+```
+
+Confira se o modelo convergiu:
+
+```{r}
+mod_0$converged
+```
+
+Efeitos fixos:
+
+```{r}
+mod_0$fixef
+```
+## Heritability
+
+### GCTA GRM
+
+We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
+
+```{r}
+# Close GDS and open the pruned one
+gdsfmt::showfile.gds(closeall = TRUE)
+
+pruned <- seqOpen("./data/kgp/allchrs_pruned.gds")
+
+# Computar a GRM
+grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
+```
+
+We extract and rename the matrix
+```{r}
+sample_ids <- seqGetData(pruned, "sample.id")
+
+grm <- grm_obj$grm
+rownames(grm) <- sample_ids
+colnames(grm) <- sample_ids
+
+# first 5 individuals:
+grm[1:5, 1:5]
+```
+
+Then, we build a new NULL model, now including the GRM.
+
+```{r}
+mod_null <- fitNullModel(annotphen, 
+                         outcome = "tpm", 
+                         covars = c("pop", "sex", "lab", "V1", "V2", "V3"),
+                         cov.mat = grm)
+```
+
+Now that we have a Null model adjusting expression levels for population, sex, laboratory, population genetic structure, and the relatedness, we can test for the association of the genetic variants with expression levels.
+
+The first step is to create a `SeqVarData` object including both the GDS (genotypes) and the Annotated data.frame (phenotypes). 
+
+Then we will use the `assocTestSingle` function to assess the effect of each variant.
+
+```{r}
+# order individuals according to GDS
+pData(annotphen) <- pData(annotphen) %>%
+    mutate(subject_id = factor(subject_id, levels = seqGetData(pruned, "sample.id"))) %>%
+    arrange(subject_id)
+
+# create SeqVarData object and iterator
+seqData <- SeqVarData(pruned, sampleData = annotphen)
+iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
+
+# test
+assoc <- assocTestSingle(iterator, mod_null)
+
+head(assoc)
+```
+
+
+`GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
+
+```{r}
+varCompCI(nullmod, prop = TRUE)
+```
