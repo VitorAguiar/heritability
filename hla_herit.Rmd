@@ -150,7 +150,7 @@ ggplot(hla_expression, aes(reorder(lab, tpm), tpm)) +
     labs(x = NULL, y = "TPM")
 ```
 
-### Expression between sexes
+### Expression between males and females
 
 ```{r}
 ggplot(hla_expression, aes(reorder(sex, tpm), tpm)) +
@@ -192,38 +192,10 @@ varMetadata(annotphen)
 head(pData(annotphen))
 ```
 
-## Fitting the NULL model
 
-The first step in finding genetic variants which are associated with a phenotype is preparing null model.
+## GRM
 
-We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. 
-
-```{r}
-mod_0 <- fitNullModel(annotphen, 
-                      outcome = "tpm", 
-                      covars = c("pop", "sex", "lab", "V1", "V2", "V3"))
-```
-
-O output de fitNullModel tem vários elementos:
-
-```{r}
-names(mod_0)
-```
-
-Confira se o modelo convergiu:
-
-```{r}
-mod_0$converged
-```
-
-Efeitos fixos:
-
-```{r}
-mod_0$fixef
-```
-## Heritability
-
-### GCTA GRM
+### GCTA
 
 We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
 
@@ -249,13 +221,32 @@ colnames(grm) <- sample_ids
 grm[1:5, 1:5]
 ```
 
-Then, we build a new NULL model, now including the GRM.
+## Fitting the Null model
+
+The first step in finding genetic variants which are associated with a phenotype is preparing null model.
+
+We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
+
 
 ```{r eval=FALSE}
 mod_null <- fitNullModel(annotphen, 
                          outcome = "tpm", 
                          covars = c("lab", "sex", "pop", "V1", "V2", "V3"),
                          cov.mat = grm)
+
+#Error in chol.default(Sigma) : the leading minor of order 445 is not positive definite
+#12. chol.default(Sigma)
+#11. chol(Sigma)
+#10. chol(Sigma)
+#9. .computeSigmaQuantities(varComp = sigma2.k, covMatList = covMatList, group.idx = group.idx)
+#8. .runAIREMLgaussian(y, X, start = start, covMatList = covMatList, group.idx = group.idx, AIREML.tol = AIREML.tol, drop.zeros = drop.zeros, max.iter = max.iter, EM.iter = EM.iter, verbose = verbose)
+#7. .fitNullModel(y = desmat$y, X = desmat$X, covMatList = cov.mat, group.idx = desmat$group.idx, family = family, start = start, AIREML.tol = AIREML.tol, max.iter = max.iter, EM.iter = EM.iter, drop.zeros = drop.zeros, return.small = return.small, verbose = verbose)
+#6. .local(x, ...)
+#5. fitNullModel(x, outcome, covars, cov.mat, group.var, ...)
+#4. fitNullModel(x, outcome, covars, cov.mat, group.var, ...)
+#3. .local(x, ...)
+#2. fitNullModel(annotphen, outcome = "tpm", covars = c("lab", "sex", "pop", "V1", "V2", "V3"), cov.mat = grm)
+#1. fitNullModel(annotphen, outcome = "tpm", covars = c("lab", "sex", "pop", "V1", "V2", "V3"), cov.mat = grm)
 ```
 
 Now that we have a Null model adjusting expression levels for population, sex, laboratory, population genetic structure, and the relatedness, we can test for the association of the genetic variants with expression levels.
@@ -286,3 +277,11 @@ head(assoc)
 ```{r eval=FALSE}
 varCompCI(nullmod, prop = TRUE)
 ```
+
+
+## Packages version
+
+```{r echo=FALSE}
+devtools::session_info()
+```
+

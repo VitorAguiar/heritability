@@ -120,10 +120,10 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Thu Mar 11 19:40:03 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 1.3m
-    Thu Mar 11 19:41:22 2021    Begin (eigenvalues and eigenvectors)
-    Thu Mar 11 19:41:23 2021    Done.
+    Fri Mar 12 12:43:03 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 1.1m
+    Fri Mar 12 12:44:09 2021    Begin (eigenvalues and eigenvectors)
+    Fri Mar 12 12:44:09 2021    Done.
 
 ``` r
 pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
@@ -195,7 +195,7 @@ ggplot(hla_expression, aes(reorder(lab, tpm), tpm)) +
 
 ![](hla_herit_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
-### Expression between sexes
+### Expression between males and females
 
 ``` r
 ggplot(hla_expression, aes(reorder(sex, tpm), tpm)) +
@@ -278,72 +278,9 @@ head(pData(annotphen))
 6 -0.006582548 1053.15
 ```
 
-## Fitting the NULL model
+## GRM
 
-The first step in finding genetic variants which are associated with a
-phenotype is preparing null model.
-
-We fit a null model which adjusts gene expression according to
-covariates such as population of origin, laboratory of sequencing, and
-sex.
-
-``` r
-mod_0 <- fitNullModel(annotphen, 
-                      outcome = "tpm", 
-                      covars = c("pop", "sex", "lab", "V1", "V2", "V3"))
-```
-
-O output de fitNullModel tem vários elementos:
-
-``` r
-names(mod_0)
-```
-
-``` 
- [1] "family"         "hetResid"       "varComp"        "varCompCov"    
- [5] "fixef"          "betaCov"        "fitted.values"  "resid.marginal"
- [9] "logLik"         "AIC"            "workingY"       "outcome"       
-[13] "model.matrix"   "group.idx"      "cholSigmaInv"   "converged"     
-[17] "zeroFLAG"       "RSS"            "Ytilde"         "resid"         
-[21] "CX"             "CXCXI"          "RSS0"           "sample.id"     
-```
-
-Confira se o modelo convergiu:
-
-``` r
-mod_0$converged
-```
-
-    [1] TRUE
-
-Efeitos fixos:
-
-``` r
-mod_0$fixef
-```
-
-``` 
-                Estimate  Std. Error     t value     Pr(>|t|)
-(Intercept)  2718.849819   745.32292  3.64788165 2.968609e-04
-popFIN       -263.170068   170.66040 -1.54206872 1.237925e-01
-popGBR          4.099168    59.08472  0.06937779 9.447212e-01
-popTSI         -2.599750   156.54411 -0.01660714 9.867577e-01
-popYRI      -4105.038700  3719.85006 -1.10354951 2.704058e-01
-sexmale       -54.378337    36.75004 -1.47968086 1.396907e-01
-labHMGU      -196.782851    71.60707 -2.74809242 6.246527e-03
-labICMB      -263.469927    62.29352 -4.22949201 2.863698e-05
-labLUMC      -369.828292    72.52208 -5.09952683 5.115038e-07
-labMPIMG     -129.932562    62.86306 -2.06691449 3.934019e-02
-labUNIGE     -466.562714    54.14672 -8.61663917 1.326779e-16
-labUU          51.871717    72.17204  0.71872314 4.727019e-01
-V1          35175.801228 30951.90934  1.13646628 2.563944e-01
-V2          -1966.705220  1996.11767 -0.98526517 3.250479e-01
-V3           -119.568020   402.02886 -0.29741154 7.662960e-01
-```
-
-## Heritability
-
-### GCTA GRM
+### GCTA
 
 We will use the `SNPRelate` package to compute a GRM. We will begin with
 the GCTA method.
@@ -374,9 +311,9 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Thu Mar 11 19:41:32 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 1.3m
-    Thu Mar 11 19:42:52 2021    Done.
+    Fri Mar 12 12:44:20 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 55s
+    Fri Mar 12 12:45:15 2021    Done.
 
 We extract and rename the matrix
 
@@ -400,13 +337,34 @@ HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
 HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
 ```
 
-Then, we build a new NULL model, now including the GRM.
+## Fitting the Null model
+
+The first step in finding genetic variants which are associated with a
+phenotype is preparing null model.
+
+We fit a null model which adjusts gene expression according to
+covariates such as population of origin, laboratory of sequencing, and
+sex. We also account for the relatedness between individuals (GRM).
 
 ``` r
 mod_null <- fitNullModel(annotphen, 
                          outcome = "tpm", 
                          covars = c("lab", "sex", "pop", "V1", "V2", "V3"),
                          cov.mat = grm)
+
+#Error in chol.default(Sigma) : the leading minor of order 445 is not positive definite
+#12. chol.default(Sigma)
+#11. chol(Sigma)
+#10. chol(Sigma)
+#9. .computeSigmaQuantities(varComp = sigma2.k, covMatList = covMatList, group.idx = group.idx)
+#8. .runAIREMLgaussian(y, X, start = start, covMatList = covMatList, group.idx = group.idx, AIREML.tol = AIREML.tol, drop.zeros = drop.zeros, max.iter = max.iter, EM.iter = EM.iter, verbose = verbose)
+#7. .fitNullModel(y = desmat$y, X = desmat$X, covMatList = cov.mat, group.idx = desmat$group.idx, family = family, start = start, AIREML.tol = AIREML.tol, max.iter = max.iter, EM.iter = EM.iter, drop.zeros = drop.zeros, return.small = return.small, verbose = verbose)
+#6. .local(x, ...)
+#5. fitNullModel(x, outcome, covars, cov.mat, group.var, ...)
+#4. fitNullModel(x, outcome, covars, cov.mat, group.var, ...)
+#3. .local(x, ...)
+#2. fitNullModel(annotphen, outcome = "tpm", covars = c("lab", "sex", "pop", "V1", "V2", "V3"), cov.mat = grm)
+#1. fitNullModel(annotphen, outcome = "tpm", covars = c("lab", "sex", "pop", "V1", "V2", "V3"), cov.mat = grm)
 ```
 
 Now that we have a Null model adjusting expression levels for
@@ -442,3 +400,149 @@ explained (heritability) by each random effect, with a 95% CI:
 ``` r
 varCompCI(nullmod, prop = TRUE)
 ```
+
+## Packages version
+
+    Error in get(genname, envir = envir) : object 'testthat_print' not found
+
+    ─ Session info ───────────────────────────────────────────────────────────────
+     setting  value                       
+     version  R version 4.0.2 (2020-06-22)
+     os       Ubuntu 16.04.7 LTS          
+     system   x86_64, linux-gnu           
+     ui       X11                         
+     language (EN)                        
+     collate  en_US.UTF-8                 
+     ctype    en_US.UTF-8                 
+     tz       America/Sao_Paulo           
+     date     2021-03-12                  
+    
+    ─ Packages ───────────────────────────────────────────────────────────────────
+     package          * version  date       lib source        
+     assertthat         0.2.1    2019-03-21 [2] CRAN (R 4.0.2)
+     backports          1.2.1    2020-12-09 [1] CRAN (R 4.0.2)
+     beeswarm           0.2.3    2016-04-25 [1] CRAN (R 4.0.2)
+     Biobase          * 2.50.0   2020-10-27 [1] Bioconductor  
+     BiocGenerics     * 0.36.0   2020-10-27 [1] Bioconductor  
+     Biostrings         2.58.0   2020-10-27 [1] Bioconductor  
+     bit                4.0.4    2020-08-04 [1] CRAN (R 4.0.2)
+     bit64              4.0.2    2020-07-30 [2] CRAN (R 4.0.2)
+     bitops             1.0-6    2013-08-17 [2] CRAN (R 4.0.2)
+     blob               1.2.1    2020-01-20 [2] CRAN (R 4.0.2)
+     broom              0.7.5    2021-02-19 [1] CRAN (R 4.0.2)
+     callr              3.5.1    2020-10-13 [1] CRAN (R 4.0.2)
+     cellranger         1.1.0    2016-07-27 [2] CRAN (R 4.0.2)
+     cli                2.3.0    2021-01-31 [1] CRAN (R 4.0.2)
+     codetools          0.2-16   2018-12-24 [4] CRAN (R 4.0.0)
+     colorspace         2.0-0    2020-11-11 [1] CRAN (R 4.0.2)
+     conquer            1.0.1    2020-05-06 [2] CRAN (R 4.0.2)
+     cowplot          * 1.1.1    2020-12-30 [1] CRAN (R 4.0.2)
+     crayon             1.4.1    2021-02-08 [1] CRAN (R 4.0.2)
+     data.table         1.13.6   2020-12-30 [1] CRAN (R 4.0.2)
+     DBI                1.1.0    2019-12-15 [2] CRAN (R 4.0.2)
+     dbplyr             1.4.4    2020-05-27 [2] CRAN (R 4.0.2)
+     desc               1.2.0    2018-05-01 [2] CRAN (R 4.0.2)
+     devtools           2.3.2    2020-09-18 [1] CRAN (R 4.0.2)
+     digest             0.6.27   2020-10-24 [1] CRAN (R 4.0.2)
+     DNAcopy            1.64.0   2020-10-27 [1] Bioconductor  
+     dplyr            * 1.0.4    2021-02-02 [1] CRAN (R 4.0.2)
+     ellipsis           0.3.1    2020-05-15 [1] CRAN (R 4.0.2)
+     evaluate           0.14     2019-05-28 [2] CRAN (R 4.0.2)
+     farver             2.0.3    2020-01-16 [2] CRAN (R 4.0.2)
+     forcats          * 0.5.0    2020-03-01 [2] CRAN (R 4.0.2)
+     foreach            1.5.0    2020-03-30 [2] CRAN (R 4.0.2)
+     formula.tools      1.7.1    2018-03-01 [1] CRAN (R 4.0.2)
+     fs                 1.5.0    2020-07-31 [1] CRAN (R 4.0.2)
+     gdsfmt           * 1.26.1   2020-12-22 [1] Bioconductor  
+     generics           0.1.0    2020-10-31 [1] CRAN (R 4.0.2)
+     GENESIS          * 2.20.1   2021-01-28 [1] Bioconductor  
+     GenomeInfoDb       1.26.2   2020-12-08 [1] Bioconductor  
+     GenomeInfoDbData   1.2.4    2021-02-20 [1] Bioconductor  
+     GenomicRanges      1.42.0   2020-10-27 [1] Bioconductor  
+     ggbeeswarm       * 0.6.0    2017-08-07 [1] CRAN (R 4.0.2)
+     ggplot2          * 3.3.2    2020-06-19 [2] CRAN (R 4.0.2)
+     glue               1.4.2    2020-08-27 [1] CRAN (R 4.0.2)
+     gtable             0.3.0    2019-03-25 [2] CRAN (R 4.0.2)
+     GWASExactHW        1.01     2013-01-05 [1] CRAN (R 4.0.2)
+     GWASTools          1.36.0   2020-10-27 [1] Bioconductor  
+     haven              2.3.1    2020-06-01 [2] CRAN (R 4.0.2)
+     highr              0.8      2019-03-20 [2] CRAN (R 4.0.2)
+     hms                0.5.3    2020-01-08 [2] CRAN (R 4.0.2)
+     htmltools          0.5.1.1  2021-01-22 [1] CRAN (R 4.0.2)
+     httr               1.4.2    2020-07-20 [2] CRAN (R 4.0.2)
+     IRanges            2.24.1   2020-12-12 [1] Bioconductor  
+     iterators          1.0.12   2019-07-26 [2] CRAN (R 4.0.2)
+     jsonlite           1.7.2    2020-12-09 [1] CRAN (R 4.0.2)
+     knitr              1.31     2021-01-27 [1] CRAN (R 4.0.2)
+     labeling           0.4.2    2020-10-20 [1] CRAN (R 4.0.2)
+     lattice            0.20-41  2020-04-02 [4] CRAN (R 4.0.0)
+     lifecycle          1.0.0    2021-02-15 [1] CRAN (R 4.0.2)
+     lmtest             0.9-38   2020-09-09 [1] CRAN (R 4.0.2)
+     logistf            1.24     2020-09-16 [1] CRAN (R 4.0.2)
+     lubridate          1.7.9.2  2020-11-13 [1] CRAN (R 4.0.2)
+     magrittr           2.0.1    2020-11-17 [1] CRAN (R 4.0.2)
+     Matrix             1.2-18   2019-11-27 [2] CRAN (R 4.0.2)
+     MatrixModels       0.4-1    2015-08-22 [2] CRAN (R 4.0.2)
+     matrixStats        0.58.0   2021-01-29 [1] CRAN (R 4.0.2)
+     memoise            1.1.0    2017-04-21 [2] CRAN (R 4.0.2)
+     mgcv               1.8-33   2020-08-27 [4] CRAN (R 4.0.2)
+     mice               3.13.0   2021-01-27 [1] CRAN (R 4.0.2)
+     modelr             0.1.8    2020-05-19 [1] CRAN (R 4.0.2)
+     munsell            0.5.0    2018-06-12 [2] CRAN (R 4.0.2)
+     nlme               3.1-149  2020-08-23 [4] CRAN (R 4.0.2)
+     operator.tools     1.6.3    2017-02-28 [1] CRAN (R 4.0.2)
+     pillar             1.4.7    2020-11-20 [1] CRAN (R 4.0.2)
+     pkgbuild           1.1.0    2020-07-13 [2] CRAN (R 4.0.2)
+     pkgconfig          2.0.3    2019-09-22 [2] CRAN (R 4.0.2)
+     pkgload            1.1.0    2020-05-29 [1] CRAN (R 4.0.2)
+     prettyunits        1.1.1    2020-01-24 [2] CRAN (R 4.0.2)
+     processx           3.4.5    2020-11-30 [1] CRAN (R 4.0.2)
+     ps                 1.5.0    2020-12-05 [1] CRAN (R 4.0.2)
+     purrr            * 0.3.4    2020-04-17 [2] CRAN (R 4.0.2)
+     quantreg           5.61     2020-07-09 [2] CRAN (R 4.0.2)
+     quantsmooth        1.56.0   2020-10-27 [1] Bioconductor  
+     R6                 2.5.0    2020-10-28 [1] CRAN (R 4.0.2)
+     Rcpp               1.0.6    2021-01-15 [1] CRAN (R 4.0.2)
+     RCurl              1.98-1.2 2020-04-18 [2] CRAN (R 4.0.2)
+     readr            * 1.4.0    2020-10-05 [1] CRAN (R 4.0.2)
+     readxl             1.3.1    2019-03-13 [1] CRAN (R 4.0.2)
+     remotes            2.2.0    2020-07-21 [2] CRAN (R 4.0.2)
+     reprex             1.0.0    2021-01-27 [1] CRAN (R 4.0.2)
+     rlang              0.4.10   2020-12-30 [1] CRAN (R 4.0.2)
+     rmarkdown          2.7      2021-02-19 [1] CRAN (R 4.0.2)
+     rprojroot          1.3-2    2018-01-03 [2] CRAN (R 4.0.2)
+     RSQLite            2.2.0    2020-01-07 [2] CRAN (R 4.0.2)
+     rstudioapi         0.13     2020-11-12 [1] CRAN (R 4.0.2)
+     rvest              0.3.6    2020-07-25 [2] CRAN (R 4.0.2)
+     S4Vectors          0.28.1   2020-12-09 [1] Bioconductor  
+     sandwich           3.0-0    2020-10-02 [1] CRAN (R 4.0.2)
+     scales             1.1.1    2020-05-11 [2] CRAN (R 4.0.2)
+     SeqArray         * 1.30.0   2020-10-27 [1] Bioconductor  
+     SeqVarTools      * 1.28.1   2020-11-20 [1] Bioconductor  
+     sessioninfo        1.1.1    2018-11-05 [2] CRAN (R 4.0.2)
+     SNPRelate        * 1.24.0   2020-10-27 [1] Bioconductor  
+     SparseM            1.78     2019-12-13 [2] CRAN (R 4.0.2)
+     stringi            1.5.3    2020-09-09 [1] CRAN (R 4.0.2)
+     stringr          * 1.4.0    2019-02-10 [2] CRAN (R 4.0.2)
+     survival           3.2-7    2020-09-28 [4] CRAN (R 4.0.2)
+     testthat           2.3.2    2020-03-02 [2] CRAN (R 4.0.2)
+     tibble           * 3.0.6    2021-01-29 [1] CRAN (R 4.0.2)
+     tidyr            * 1.1.2    2020-08-27 [1] CRAN (R 4.0.2)
+     tidyselect         1.1.0    2020-05-11 [2] CRAN (R 4.0.2)
+     tidyverse        * 1.3.0    2019-11-21 [1] CRAN (R 4.0.2)
+     usethis            2.0.1    2021-02-10 [1] CRAN (R 4.0.2)
+     vctrs              0.3.6    2020-12-17 [1] CRAN (R 4.0.2)
+     vipor              0.4.5    2017-03-22 [1] CRAN (R 4.0.2)
+     viridisLite        0.3.0    2018-02-01 [2] CRAN (R 4.0.2)
+     withr              2.4.1    2021-01-26 [1] CRAN (R 4.0.2)
+     xfun               0.21     2021-02-10 [1] CRAN (R 4.0.2)
+     xml2               1.3.2    2020-04-23 [2] CRAN (R 4.0.2)
+     XVector            0.30.0   2020-10-27 [1] Bioconductor  
+     yaml               2.2.1    2020-02-01 [2] CRAN (R 4.0.2)
+     zlibbioc           1.36.0   2020-10-27 [1] Bioconductor  
+     zoo                1.8-8    2020-05-02 [2] CRAN (R 4.0.2)
+    
+    [1] /raid/genevol/users/vitor/R/x86_64-pc-linux-gnu-library/4.0
+    [2] /usr/local/lib/R/site-library
+    [3] /usr/lib/R/site-library
+    [4] /usr/lib/R/library
