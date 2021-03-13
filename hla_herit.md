@@ -120,10 +120,10 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Fri Mar 12 12:43:03 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 1.1m
-    Fri Mar 12 12:44:09 2021    Begin (eigenvalues and eigenvectors)
-    Fri Mar 12 12:44:09 2021    Done.
+    Fri Mar 12 21:23:07 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 45s
+    Fri Mar 12 21:23:52 2021    Begin (eigenvalues and eigenvectors)
+    Fri Mar 12 21:23:52 2021    Done.
 
 ``` r
 pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
@@ -311,9 +311,9 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Fri Mar 12 12:44:20 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 55s
-    Fri Mar 12 12:45:15 2021    Done.
+    Fri Mar 12 21:24:00 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 37s
+    Fri Mar 12 21:24:37 2021    Done.
 
 We extract and rename the matrix
 
@@ -336,6 +336,29 @@ HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
 HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
 HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
 ```
+
+### Distribution of the GRM diagonal values
+
+![](hla_herit_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
+
+### GRM off-diagonal values
+
+\* diagonal is set to NA so we can better see the range for off-diagonal
+(much smaller) values
+
+![](hla_herit_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
+
+### GRM eigenvalues
+
+``` r
+eig <- eigen(grm)
+
+range(eig$values)
+```
+
+    [1] -9.687702e-14  5.794577e+00
+
+![](hla_herit_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
 
 ## Fitting the Null model
 
