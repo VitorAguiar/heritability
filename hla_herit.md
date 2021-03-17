@@ -1,4 +1,4 @@
-Exploratory data analysis
+Heritability
 ================
 
 ## Sample:
@@ -71,6 +71,7 @@ library(GENESIS)
 library(Biobase)
 library(cowplot)
 library(ggbeeswarm)
+library(ggthemes)
 ```
 
 ### Concatenate GDS files for all chromosomes
@@ -120,10 +121,10 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Fri Mar 12 21:23:07 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 45s
-    Fri Mar 12 21:23:52 2021    Begin (eigenvalues and eigenvectors)
-    Fri Mar 12 21:23:52 2021    Done.
+    Wed Mar 17 20:53:34 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 38s
+    Wed Mar 17 20:54:12 2021    Begin (eigenvalues and eigenvectors)
+    Wed Mar 17 20:54:12 2021    Done.
 
 ``` r
 pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
@@ -139,18 +140,23 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
 ``` r
 p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
     geom_point() +
-    scale_color_viridis_d() +
-    theme_bw()
+    scale_color_colorblind() +
+    theme(panel.grid.minor = element_blank(),
+          panel.background = element_rect(fill = "grey45"),
+          legend.key = element_rect(fill = "grey45")) +
+    labs(color = "Population")
 
 p2 <- ggplot(pcadf, aes(V2, V3, color = pop)) +
     geom_point() +
-    scale_color_viridis_d() +
-    theme_bw()
+    scale_color_colorblind() +
+    theme(panel.grid.minor = element_blank(),
+          panel.background = element_rect(fill = "grey45"))
 
 p3 <- ggplot(pcadf, aes(V3, V4, color = pop)) +
     geom_point() +
-    scale_color_viridis_d() +
-    theme_bw()
+    scale_color_colorblind() +
+    theme(panel.grid.minor = element_blank(),
+          panel.background = element_rect(fill = "grey45"))
 
 p_legend <- get_legend(p1)
 
@@ -176,7 +182,7 @@ hla_expression <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
 ggplot(hla_expression, aes(reorder(pop, tpm), tpm)) +
     geom_quasirandom(aes(color = pop), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
-    scale_color_viridis_d() +
+    scale_color_colorblind() +
     theme_bw() +
     labs(x = NULL, y = "TPM")
 ```
@@ -311,9 +317,9 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Fri Mar 12 21:24:00 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 37s
-    Fri Mar 12 21:24:37 2021    Done.
+    Wed Mar 17 20:54:20 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 39s
+    Wed Mar 17 20:54:59 2021    Done.
 
 We extract and rename the matrix
 
@@ -438,7 +444,7 @@ varCompCI(nullmod, prop = TRUE)
      collate  en_US.UTF-8                 
      ctype    en_US.UTF-8                 
      tz       America/Sao_Paulo           
-     date     2021-03-12                  
+     date     2021-03-17                  
     
     ─ Packages ───────────────────────────────────────────────────────────────────
      package          * version  date       lib source        
@@ -484,6 +490,7 @@ varCompCI(nullmod, prop = TRUE)
      GenomicRanges      1.42.0   2020-10-27 [1] Bioconductor  
      ggbeeswarm       * 0.6.0    2017-08-07 [1] CRAN (R 4.0.2)
      ggplot2          * 3.3.2    2020-06-19 [2] CRAN (R 4.0.2)
+     ggthemes         * 4.2.4    2021-01-20 [1] CRAN (R 4.0.2)
      glue               1.4.2    2020-08-27 [1] CRAN (R 4.0.2)
      gtable             0.3.0    2019-03-25 [2] CRAN (R 4.0.2)
      GWASExactHW        1.01     2013-01-05 [1] CRAN (R 4.0.2)
@@ -556,7 +563,6 @@ varCompCI(nullmod, prop = TRUE)
      usethis            2.0.1    2021-02-10 [1] CRAN (R 4.0.2)
      vctrs              0.3.6    2020-12-17 [1] CRAN (R 4.0.2)
      vipor              0.4.5    2017-03-22 [1] CRAN (R 4.0.2)
-     viridisLite        0.3.0    2018-02-01 [2] CRAN (R 4.0.2)
      withr              2.4.1    2021-01-26 [1] CRAN (R 4.0.2)
      xfun               0.21     2021-02-10 [1] CRAN (R 4.0.2)
      xml2               1.3.2    2020-04-23 [2] CRAN (R 4.0.2)

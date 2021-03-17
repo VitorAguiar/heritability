@@ -1,5 +1,5 @@
 ---
-title: "Exploratory data analysis"
+title: "Heritability"
 output: github_document
 ---
 
@@ -46,6 +46,7 @@ library(GENESIS)
 library(Biobase)
 library(cowplot)
 library(ggbeeswarm)
+library(ggthemes)
 ```
 
 
@@ -78,7 +79,6 @@ seqClose(gds)
 
 
 ### PCA on genotype data
-
 ```{r}
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
@@ -100,18 +100,23 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
 ```{r pcaplot}
 p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
     geom_point() +
-    scale_color_viridis_d() +
-    theme_bw()
+    scale_color_colorblind() +
+    theme(panel.grid.minor = element_blank(),
+          panel.background = element_rect(fill = "grey45"),
+          legend.key = element_rect(fill = "grey45")) +
+    labs(color = "Population")
 
 p2 <- ggplot(pcadf, aes(V2, V3, color = pop)) +
     geom_point() +
-    scale_color_viridis_d() +
-    theme_bw()
+    scale_color_colorblind() +
+    theme(panel.grid.minor = element_blank(),
+          panel.background = element_rect(fill = "grey45"))
 
 p3 <- ggplot(pcadf, aes(V3, V4, color = pop)) +
     geom_point() +
-    scale_color_viridis_d() +
-    theme_bw()
+    scale_color_colorblind() +
+    theme(panel.grid.minor = element_blank(),
+          panel.background = element_rect(fill = "grey45"))
 
 p_legend <- get_legend(p1)
 
@@ -135,7 +140,7 @@ hla_expression <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
 ggplot(hla_expression, aes(reorder(pop, tpm), tpm)) +
     geom_quasirandom(aes(color = pop), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
-    scale_color_viridis_d() +
+    scale_color_colorblind() +
     theme_bw() +
     labs(x = NULL, y = "TPM")
 ```
@@ -233,9 +238,11 @@ grm_df <- grm %>%
 
 grm_df %>%
     filter(id1 == id2) %>%
-    ggplot(aes(reorder(id1, value), value, fill = pop1, color = pop1)) +
-    geom_bar(stat = "identity") +
-    geom_hline(yintercept = 1L, linetype = 2, size = 1) +
+    ggplot(aes(reorder(id1, value), value)) +
+    geom_bar(aes(fill = pop1, color = pop1), stat = "identity") +
+    scale_fill_colorblind() +
+    scale_color_colorblind() +
+    geom_hline(yintercept = 1L, linetype = 2, size = 1, color = "grey") +
     theme_bw() +
     theme(panel.grid = element_blank(),
           axis.text.x = element_blank(),
@@ -256,7 +263,6 @@ grm_offdiag <- grm_df %>%
     arrange(pop1, pop2, id1, id2) %>%
     mutate(id1 = fct_inorder(id1),
            id2 = fct_inorder(id2))
-    
 
 lines_v <- grm_offdiag %>%
     group_by(pop1) %>%
