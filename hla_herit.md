@@ -121,10 +121,10 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 17 20:53:34 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 38s
-    Wed Mar 17 20:54:12 2021    Begin (eigenvalues and eigenvectors)
-    Wed Mar 17 20:54:12 2021    Done.
+    Thu Mar 18 13:56:58 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 36s
+    Thu Mar 18 13:57:34 2021    Begin (eigenvalues and eigenvectors)
+    Thu Mar 18 13:57:34 2021    Done.
 
 ``` r
 pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
@@ -268,20 +268,13 @@ head(pData(annotphen))
 ```
 
 ``` 
-  sample.id subject_id      lab    sex pop          V1            V2
-1   HG00096    HG00096    UNIGE   male GBR -0.02409590  1.178854e-03
-2   HG00097    HG00097     LUMC female GBR -0.02433438 -9.808199e-04
-3   HG00099    HG00099     HMGU female GBR -0.02452840 -2.650025e-05
-4   HG00100    HG00100 CNAG_CRG female GBR -0.02342908  1.718510e-02
-5   HG00101    HG00101    UNIGE   male GBR -0.02409977  1.364934e-03
-6   HG00102    HG00102    MPIMG female GBR -0.02474157 -2.891527e-03
-            V3     tpm
-1 -0.005208341 1604.34
-2 -0.007818318 1342.20
-3 -0.007551133  921.60
-4  0.007413764 1392.66
-5 -0.003502374 1082.02
-6 -0.006582548 1053.15
+  sample.id subject_id      lab    sex pop          V1            V2           V3     tpm
+1   HG00096    HG00096    UNIGE   male GBR -0.02409590  1.178854e-03 -0.005208341 1604.34
+2   HG00097    HG00097     LUMC female GBR -0.02433438 -9.808199e-04 -0.007818318 1342.20
+3   HG00099    HG00099     HMGU female GBR -0.02452840 -2.650025e-05 -0.007551133  921.60
+4   HG00100    HG00100 CNAG_CRG female GBR -0.02342908  1.718510e-02  0.007413764 1392.66
+5   HG00101    HG00101    UNIGE   male GBR -0.02409977  1.364934e-03 -0.003502374 1082.02
+6   HG00102    HG00102    MPIMG female GBR -0.02474157 -2.891527e-03 -0.006582548 1053.15
 ```
 
 ## GRM
@@ -297,10 +290,8 @@ gdsfmt::showfile.gds(closeall = TRUE)
 ```
 
 ``` 
-                                                            FileName ReadOnly
-1 /raid/genevol/users/vitor/heritability/data/kgp/allchrs_pruned.gds     TRUE
-   State
-1 closed
+                                                            FileName ReadOnly  State
+1 /raid/genevol/users/vitor/heritability/data/kgp/allchrs_pruned.gds     TRUE closed
 ```
 
 ``` r
@@ -317,9 +308,9 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 17 20:54:20 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 39s
-    Wed Mar 17 20:54:59 2021    Done.
+    Thu Mar 18 13:57:42 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 40s
+    Thu Mar 18 13:58:22 2021    Done.
 
 We extract and rename the matrix
 
@@ -366,6 +357,28 @@ range(eig$values)
 
 ![](hla_herit_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
 
+Because we have a small negative eigenvalue, the code for model fitting
+below will fail. Therefore we need to apply a correction to ensure our
+GRM is positive definite.
+
+``` r
+eig$values[eig$values < 1e-10] <- 1e-10
+grm_pd <- eig$vectors %*% diag(eig$values) %*% t(eig$vectors)
+
+rownames(grm_pd) <- rownames(grm)
+colnames(grm_pd) <- colnames(grm)
+grm_pd[1:5, 1:5]
+```
+
+``` 
+            HG00096      HG00097      HG00099     HG00100     HG00101
+HG00096 0.956687356 0.0022034937 0.0023660411 0.001431433 0.003642691
+HG00097 0.002203494 0.9754513066 0.0007980224 0.003025820 0.003069123
+HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
+HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
+HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
+```
+
 ## Fitting the Null model
 
 The first step in finding genetic variants which are associated with a
@@ -379,21 +392,57 @@ sex. We also account for the relatedness between individuals (GRM).
 mod_null <- fitNullModel(annotphen, 
                          outcome = "tpm", 
                          covars = c("lab", "sex", "pop", "V1", "V2", "V3"),
-                         cov.mat = grm)
+                         cov.mat = grm_pd)
 
-#Error in chol.default(Sigma) : the leading minor of order 445 is not positive definite
-#12. chol.default(Sigma)
-#11. chol(Sigma)
-#10. chol(Sigma)
-#9. .computeSigmaQuantities(varComp = sigma2.k, covMatList = covMatList, group.idx = group.idx)
-#8. .runAIREMLgaussian(y, X, start = start, covMatList = covMatList, group.idx = group.idx, AIREML.tol = AIREML.tol, drop.zeros = drop.zeros, max.iter = max.iter, EM.iter = EM.iter, verbose = verbose)
-#7. .fitNullModel(y = desmat$y, X = desmat$X, covMatList = cov.mat, group.idx = desmat$group.idx, family = family, start = start, AIREML.tol = AIREML.tol, max.iter = max.iter, EM.iter = EM.iter, drop.zeros = drop.zeros, return.small = return.small, verbose = verbose)
-#6. .local(x, ...)
-#5. fitNullModel(x, outcome, covars, cov.mat, group.var, ...)
-#4. fitNullModel(x, outcome, covars, cov.mat, group.var, ...)
-#3. .local(x, ...)
-#2. fitNullModel(annotphen, outcome = "tpm", covars = c("lab", "sex", "pop", "V1", "V2", "V3"), cov.mat = grm)
-#1. fitNullModel(annotphen, outcome = "tpm", covars = c("lab", "sex", "pop", "V1", "V2", "V3"), cov.mat = grm)
+# Computing Variance Component Estimates...
+# Sigma^2_A     log-lik     RSS
+# [1] 90450.0733329 90450.0733329 -3180.1677469     0.7946036
+# [1]  1.299377e+05  3.971180e+04 -3.179600e+03  8.504499e-01
+# [1]  1.471800e+05  1.542620e+04 -3.179408e+03  8.898544e-01
+# [1]  1.558534e+05  2.022088e+03 -3.179333e+03  9.183829e-01
+# [1]    157038.422         0.000     -7453.163 396731067.636
+# [1]  4.859942e+04  0.000000e+00 -7.602906e+03  2.572755e+09
+# [1]  2.237060e+04  0.000000e+00 -7.674987e+03  7.814267e+09
+# [1]  4.924574e+03  0.000000e+00           NaN -4.070946e+10
+# [1]  1.581044e+03  0.000000e+00 -7.177704e+03  1.094249e+10
+# [1]  6.968396e+02  0.000000e+00 -7.597091e+03  1.746475e+11
+# [1]      80354.67          0.00           NaN -465145381.86
+# [1]   6709000         0       NaN -31366924
+# [1] 1926401772.18          0.00           NaN     -44765.28
+# [1]  4.129558e+10  0.000000e+00 -7.704039e+03  4.845637e+03
+# [1]  5.117687e+12  0.000000e+00 -7.021044e+03  1.631345e+00
+# [1]  6.099762e+16  0.000000e+00           NaN -1.856986e-03
+# [1]  2.610447e+16  0.000000e+00 -7.117544e+03  5.009863e-04
+# [1]  2.837112e+15  0.000000e+00 -7.746238e+03  8.582223e-02
+# [1]  1.508941e+21  0.000000e+00 -7.328298e+03  2.310102e-08
+# [1]  5.601089e+32  0.000000e+00           NaN -5.510454e-19
+# [1]  1.263340e+55  0.000000e+00           NaN -1.149428e-41
+# [1]  1.469691e+100   0.000000e+00  -7.751168e+03   1.695565e-86
+# [1]  7.055943e+99  0.000000e+00           NaN -4.475945e-86
+# [1]  1.797777e+189   0.000000e+00            NaN -1.101004e-175
+# Error in solve.default(AI, score) : 
+#   Lapack routine dgesv: system is exactly singular: U[1,1] = 0
+# In addition: There were 18 warnings (use warnings() to see them)
+# > warnings()
+# Warning messages:
+# 1: In log(2 * pi * RSS) : NaNs produced
+# 2: In log(2 * pi * RSS) : NaNs produced
+# 3: In log(2 * pi * RSS) : NaNs produced
+# 4: In log(2 * pi * RSS) : NaNs produced
+# 5: In log(2 * pi * RSS) : NaNs produced
+# 6: In log(2 * pi * RSS) : NaNs produced
+# 7: In log(2 * pi * RSS) : NaNs produced
+# 8: In log(2 * pi * RSS) : NaNs produced
+# 9: In log(2 * pi * RSS) : NaNs produced
+# 10: In log(2 * pi * RSS) : NaNs produced
+# 11: In log(2 * pi * RSS) : NaNs produced
+# 12: In log(2 * pi * RSS) : NaNs produced
+# 13: In log(2 * pi * RSS) : NaNs produced
+# 14: In log(2 * pi * RSS) : NaNs produced
+# 15: In log(2 * pi * RSS) : NaNs produced
+# 16: In log(2 * pi * RSS) : NaNs produced
+# 17: In log(2 * pi * RSS) : NaNs produced
+# 18: In log(2 * pi * RSS) : NaNs produced
 ```
 
 Now that we have a Null model adjusting expression levels for
@@ -434,7 +483,7 @@ varCompCI(nullmod, prop = TRUE)
 
     Error in get(genname, envir = envir) : object 'testthat_print' not found
 
-    ─ Session info ───────────────────────────────────────────────────────────────
+    ─ Session info ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
      setting  value                       
      version  R version 4.0.2 (2020-06-22)
      os       Ubuntu 16.04.7 LTS          
@@ -444,9 +493,9 @@ varCompCI(nullmod, prop = TRUE)
      collate  en_US.UTF-8                 
      ctype    en_US.UTF-8                 
      tz       America/Sao_Paulo           
-     date     2021-03-17                  
+     date     2021-03-18                  
     
-    ─ Packages ───────────────────────────────────────────────────────────────────
+    ─ Packages ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
      package          * version  date       lib source        
      assertthat         0.2.1    2019-03-21 [2] CRAN (R 4.0.2)
      backports          1.2.1    2020-12-09 [1] CRAN (R 4.0.2)
