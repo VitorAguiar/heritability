@@ -10,34 +10,6 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE,
 options(width = 999)
 ```
 
-## Sample:
-
-- 445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
-
-
-
-## 1. VCF processing
-
-### Subset and filtering
-
-Here we select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
-
-Next we call an R script that converts VCF to GDS.
-
-
-```{bash, eval=FALSE, code = readLines("launch_processVCF.sh")}
-
-```
-
-The content of the vcf2gds.R script is the following:
-
-```{r, eval=FALSE, code = readLines("vcf2gds.R")}
-```
-
-## Analyses in R
-
-### Packages:
-
 ```{r pkgs}
 library(tidyverse)
 library(SeqArray) 
@@ -50,18 +22,34 @@ library(ggbeeswarm)
 library(ggthemes)
 ```
 
+## Sample:
 
-### Concatenate GDS files for all chromosomes
+- 445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
+
+## Data pre-processing
+
+### Genotypes
+
+We use VCF files provided by 1000 Genomes Phase III (low coverage, in GRCh38 coordinates).
+
+We select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
+
+Then we convert VCF to GDS, which is a data structure that optimizes working with genotype data in R.
+
+To perform all this processing, we run the script `./launch_processVCF.sh`.
+
+Then we concatenate the GDS files for each chromosome in a single GDS with the code below:
 
 ```{r VcfToGds, eval=FALSE}
-gds_file <- "/raid/genevol/heritability/data/kgp/allchrs.gds"
-
 gds_list <- sprintf("/raid/genevol/heritability/data/kgp/chr%d.gds", 1:22)
+
+gds_file <- "/raid/genevol/heritability/data/kgp/allchrs.gds"
 
 seqMerge(gds_list, gds_file)
 ```
 
-### Pruning
+We reduce the amount of variants by LD pruning:
+
 ```{r, eval=FALSE}
 # this step takes hours
 gds <- seqOpen(gds_file)
@@ -78,6 +66,51 @@ seqExport(gds, "/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 seqClose(gds)
 ```
 
+
+### Phenotypes
+
+We use the FASTQ files provided by the Geuvadis Consortium, and estimate expression with Salmon. We begin with the expression of HLA-A.
+
+Transcript Per Million (TPM) values are quantile normal transformed by `QTLtools correct`. Here is a comparison between raw and standardize TPMs:
+
+
+```{r}
+# raw
+hla_expression <- 
+    "/raid/genevol/heritability/data/geuvadis_expression.bed.gz" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
+
+# standardized by QTLtools
+hla_expression_std <- 
+    "/raid/genevol/heritability/data/geuvadis_expression_std.bed" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
+```
+
+```{r, echo = FALSE}
+h1 <- ggplot(hla_expression, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "raw")
+
+h2 <- ggplot(hla_expression_std, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "standardized")
+
+s1 <- left_join(hla_expression, hla_expression_std, 
+          by = "sampleid", suffix = c("_raw", "_std")) %>%
+    ggplot(aes(value_raw, value_std)) +
+    geom_point() +
+    labs(x = "Raw", y = "Standardized")
+
+plot_grid(h1, h2, s1, nrow = 2)
+```
+
+## Results
 
 ### PCA on genotype data
 ```{r}
@@ -99,7 +132,7 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
     inner_join(pops, ., by = "sampleid")
 ```
 
-```{r pcaplot}
+```{r pcaplot, echo=FALSE}
 p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
     geom_point() +
     scale_color_colorblind() +
@@ -129,50 +162,8 @@ plot_grid(p1 + theme(legend.position = "none"),
           nrow = 2)
 ```
 
-### Phenotypes (HLA-A expression in Geuvadis)
 
-```{r}
-hla_expression <- 
-    "/raid/genevol/heritability/data/geuvadis_expression.bed.gz" %>%
-    read_tsv() %>%
-    filter(id == "HLA-A") %>%
-    pivot_longer(-(1:6), names_to = "sampleid") %>%
-    select(sampleid, value)
-
-hla_expression_std <- 
-    "/raid/genevol/heritability/data/geuvadis_expression_std.bed" %>%
-    read_tsv() %>%
-    filter(id == "HLA-A") %>%
-    pivot_longer(-(1:6), names_to = "sampleid") %>%
-    select(sampleid, value)
-```
-
-#### Comparing the distribution of raw vs. standardized expression values
-
-TPM values were quantile normal transformed by `QTLtools correct`.
-
-```{r}
-h1 <- ggplot(hla_expression, aes(value)) +
-    geom_histogram() +
-    labs(x = NULL, title = "raw")
-
-h2 <- ggplot(hla_expression_std, aes(value)) +
-    geom_histogram() +
-    labs(x = NULL, title = "standardized")
-
-s1 <- left_join(hla_expression, hla_expression_std, 
-          by = "sampleid", suffix = c("_raw", "_std")) %>%
-    ggplot(aes(value_raw, value_std)) +
-    geom_point() +
-    labs(x = "Raw", y = "Standardized")
-
-plot_grid(h1, h2, s1, nrow = 2)
-```
-
-We will use standardized expression values.
-
-
-### Expression across populations
+### HLA-A expression across populations
 
 ```{r}
 sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
@@ -182,7 +173,6 @@ sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
 expression_df <- left_join(hla_expression_std, sample_info, by = "sampleid") %>%
     select(sampleid, population, sex, lab, value)
 
-
 ggplot(expression_df, aes(reorder(population, value), value)) +
     geom_quasirandom(aes(color = population), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
@@ -191,7 +181,7 @@ ggplot(expression_df, aes(reorder(population, value), value)) +
     labs(x = NULL, y = "Std TPM")
 ```
 
-### Expression across laboratories
+### HLA-A expression across laboratories
 
 ```{r}
 ggplot(expression_df, aes(reorder(lab, value), value)) +
@@ -201,7 +191,7 @@ ggplot(expression_df, aes(reorder(lab, value), value)) +
     labs(x = NULL, y = "Std TPM")
 ```
 
-### Expression between males and females
+### HLA-A expression between males and females
 
 ```{r}
 ggplot(expression_df, aes(reorder(sex, value), value)) +
@@ -218,15 +208,16 @@ Before we continue, we need to transform our phenotype data.frame into an "Annot
 
 ```{r}
 metadata <- 
-    data.frame(labelDescription = c("sample identifier",
-                                    "subject identifier",
-                                    "laboratory of RNA sequencing",
-                                    "subject's sex",
-                                    "subject's population",
-                                    "PC 1",
-                                    "PC 2",
-                                    "PC 3",
-                                    "expression levels in TPM"))
+    c("sample identifier",
+      "subject identifier",
+      "laboratory of RNA sequencing",
+      "subject's sex",
+      "subject's population",
+      "PC 1",
+      "PC 2",
+      "PC 3",
+      "expression levels in TPM") %>%
+    data.frame(labelDescription = .) 
 
 annotphen <- expression_df %>%
     mutate(sample.id = sampleid) %>%
@@ -352,52 +343,25 @@ ggplot(grm_offdiag) +
     geom_text(data = labels_h, aes(y = id2, x = 0, label = pop2), 
               vjust = -0.5, angle = 90) +
     labs(title = "Off-diagonal values")
-
-
-```
-
-### GRM eigenvalues
-
-```{r}
-eig <- eigen(grm)
-
-range(eig$values)
-```
-
-```{r echo = FALSE}
-ggplot(tibble(i = 1:length(eig$values), value = eig$values), aes(value)) +
-    geom_histogram() +
-    theme_bw()
-```
-
-Because we have a small negative eigenvalue, the code for model fitting below will fail. Therefore we need to apply a correction to ensure our GRM is positive definite.
-
-```{r}
-eig$values <- eig$values + abs(min(eig$values))
-grm_pd <- eig$vectors %*% diag(eig$values) %*% t(eig$vectors)
-
-rownames(grm_pd) <- rownames(grm)
-colnames(grm_pd) <- colnames(grm)
-grm_pd[1:5, 1:5]
 ```
 
 
-
-## Fitting the Null model
+### Fitting the Null model
 
 The first step in finding genetic variants which are associated with a phenotype is preparing null model.
 
 We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
 
-
 ```{r}
 mod_null <- fitNullModel(annotphen, 
                          outcome = "value", 
                          covars = c("lab", "sex", "V1", "V2"),
-                         cov.mat = grm_pd)
+                         cov.mat = grm)
 ```
 
-\*Note: if we include PC3, we get an error "the leading minor of order 4 is not positive definite"
+\*Note: if we include PC3, we get an error "the leading minor of order 445 is not positive definite"
+
+### Association testing
 
 Now that we have a Null model adjusting expression levels for sex, laboratory, population genetic structure, and relatedness, we can test for the association of the genetic variants with expression levels.
 
@@ -405,7 +369,7 @@ The first step is to create a `SeqVarData` object including both the GDS (genoty
 
 Then we will use the `assocTestSingle` function to assess the effect of each variant.
 
-```{r}
+```{r, assocTest}
 # order individuals according to GDS
 pData(annotphen) <- pData(annotphen) %>%
     mutate(sampleid = factor(sampleid, levels = seqGetData(pruned, "sample.id"))) %>%
@@ -418,9 +382,11 @@ iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 # test
 assoc <- assocTestSingle(iterator, mod_null)
 
-head(assoc)
+assoc
 ```
 
+
+### Heritability
 
 `GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
 
@@ -429,9 +395,8 @@ varCompCI(mod_null, prop = TRUE)
 ```
 
 
-## Packages version
+## Package versions
 
 ```{r echo=FALSE}
 devtools::session_info()
 ```
-
