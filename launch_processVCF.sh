@@ -7,14 +7,12 @@
 #PBS -t 1-22
 #PBS -N processVCF
 #PBS -j oe
-#PBS -o log/$PBS_JOBNAME
-
-cd $PBS_O_WORKDIR
+#PBS -o $HOME/heritability/log/$PBS_JOBNAME
 
 chr=$PBS_ARRAYID
 samples=/raid/genevol/heritability/samples.txt
-vcfin=/raid/genevol/heritability/genotypes_1000g/ALL.chr${chr}_GRCh38.genotypes.20170504.vcf.gz
-vcfout=./data/kgp/chr${chr}_subset.vcf
+vcfin=/raid/genevol/vcf_1000G/phase3_20130502_grch38positions/ALL.chr${chr}_GRCh38.genotypes.20170504.vcf.gz
+vcfout=/raid/genevol/heritability/data/kgp/chr${chr}_subset.vcf
 
 bcftools view --samples-file $samples --force-samples $vcfin |\
     bcftools view --genotype ^miss - |\

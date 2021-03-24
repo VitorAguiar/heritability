@@ -3,16 +3,13 @@ Heritability
 
 ## Sample:
 
-  - 445 individuals from The 1000 Genomes Project (358 from 4 European
-    populations + 87 Yorubans) with RNA-seq available from the Geuvadis
-    consortium.
+-   445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
 
-## 1\. VCF processing
+## 1. VCF processing
 
 ### Subset and filtering
 
-Here we select the GEUVADIS individuals, and exclude variants with
-missing data or which are monomorphic in this subset of individuals.
+Here we select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
 
 Next we call an R script that converts VCF to GDS.
 
@@ -26,14 +23,12 @@ Next we call an R script that converts VCF to GDS.
 #PBS -t 1-22
 #PBS -N processVCF
 #PBS -j oe
-#PBS -o log/$PBS_JOBNAME
-
-cd $PBS_O_WORKDIR
+#PBS -o $HOME/heritability/log/$PBS_JOBNAME
 
 chr=$PBS_ARRAYID
 samples=/raid/genevol/heritability/samples.txt
-vcfin=/raid/genevol/heritability/genotypes_1000g/ALL.chr${chr}_GRCh38.genotypes.20170504.vcf.gz
-vcfout=./data/kgp/chr${chr}_subset.vcf
+vcfin=/raid/genevol/vcf_1000G/phase3_20130502_grch38positions/ALL.chr${chr}_GRCh38.genotypes.20170504.vcf.gz
+vcfout=/raid/genevol/heritability/data/kgp/chr${chr}_subset.vcf
 
 bcftools view --samples-file $samples --force-samples $vcfin |\
     bcftools view --genotype ^miss - |\
@@ -51,8 +46,8 @@ library(SeqArray)
 
 chr <- commandArgs(TRUE)[1]
 
-vcf_file <- sprintf("./data/kgp/chr%s_subset.vcf", chr)
-gds_file <- sprintf("./data/kgp/chr%s_tmp.gds", chr)
+vcf_file <- sprintf("/raid/genevol/heritability/data/kgp/chr%s_subset.vcf", chr)
+gds_file <- sprintf("/raid/genevol/heritability/data/kgp/chr%s_tmp.gds", chr)
 
 #convert
 seqVCF2GDS(vcf_file, gds_file, fmt.import = "GT", verbose = FALSE)
@@ -77,9 +72,9 @@ library(ggthemes)
 ### Concatenate GDS files for all chromosomes
 
 ``` r
-gds_file <- "/home/vitor/heritability/data/kgp/allchrs.gds"
+gds_file <- "/raid/genevol/heritability/data/kgp/allchrs.gds"
 
-gds_list <- sprintf("/home/vitor/heritability/data/kgp/chr%d.gds", 1:22)
+gds_list <- sprintf("/raid/genevol/heritability/data/kgp/chr%d.gds", 1:22)
 
 seqMerge(gds_list, gds_file)
 ```
@@ -98,7 +93,7 @@ pruned <- snpgdsLDpruning(gds,
 prunedsnps <- unlist(pruned, use.names = FALSE)
 
 seqSetFilter(gds, variant.id = prunedsnps)
-seqExport(gds, "/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+seqExport(gds, "/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 seqClose(gds)
 ```
 
@@ -108,7 +103,9 @@ seqClose(gds)
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
 
-gds <- seqOpen("/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+gds <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+
+sample_ids <- seqGetData(gds, "sample.id")
 
 pca <- snpgdsPCA(gds, num.thread = 16L)
 ```
@@ -121,15 +118,16 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Thu Mar 18 13:56:58 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 36s
-    Thu Mar 18 13:57:34 2021    Begin (eigenvalues and eigenvectors)
-    Thu Mar 18 13:57:34 2021    Done.
+    Tue Mar 23 21:07:59 2021    (internal increment: 8752)
+
+    [..................................................]  0%, ETC: ---        
+    [==================================================] 100%, completed, 1.1m
+    Tue Mar 23 21:09:08 2021    Begin (eigenvalues and eigenvectors)
+    Tue Mar 23 21:09:08 2021    Done.
 
 ``` r
-pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
-    distinct(subject_id, pop) %>%
-    rename(sampleid = subject_id)
+pops <- read_tsv("/raid/genevol/heritability/data/geuvadis_metadata.tsv") %>%
+    distinct(sampleid, population)
 
 pcadf <- as.data.frame(pca$eigenvect) %>%
     as_tibble() %>%
@@ -138,7 +136,7 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
 ```
 
 ``` r
-p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
+p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
     geom_point() +
     scale_color_colorblind() +
     theme(panel.grid.minor = element_blank(),
@@ -146,13 +144,13 @@ p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
           legend.key = element_rect(fill = "grey45")) +
     labs(color = "Population")
 
-p2 <- ggplot(pcadf, aes(V2, V3, color = pop)) +
+p2 <- ggplot(pcadf, aes(V2, V3, color = population)) +
     geom_point() +
     scale_color_colorblind() +
     theme(panel.grid.minor = element_blank(),
           panel.background = element_rect(fill = "grey45"))
 
-p3 <- ggplot(pcadf, aes(V3, V4, color = pop)) +
+p3 <- ggplot(pcadf, aes(V3, V4, color = population)) +
     geom_point() +
     scale_color_colorblind() +
     theme(panel.grid.minor = element_blank(),
@@ -167,63 +165,100 @@ plot_grid(p1 + theme(legend.position = "none"),
           nrow = 2)
 ```
 
-![](hla_herit_files/figure-gfm/pcaplot-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/pcaplot-1.png)
 
 ### Phenotypes (HLA-A expression in Geuvadis)
 
 ``` r
-hla_expression <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
-    filter(gene_name == "HLA-A", subject_id %in% seqGetData(gds, "sample.id")) 
+hla_expression <- 
+    "/raid/genevol/heritability/data/geuvadis_expression.bed.gz" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
+
+hla_expression_std <- 
+    "/raid/genevol/heritability/data/geuvadis_expression_std.bed" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
 ```
+
+#### Comparing the distribution of raw vs. standardized expression values
+
+TPM values were quantile normal transformed by `QTLtools correct`.
+
+``` r
+h1 <- ggplot(hla_expression, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "raw")
+
+h2 <- ggplot(hla_expression_std, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "standardized")
+
+s1 <- left_join(hla_expression, hla_expression_std, 
+          by = "sampleid", suffix = c("_raw", "_std")) %>%
+    ggplot(aes(value_raw, value_std)) +
+    geom_point() +
+    labs(x = "Raw", y = "Standardized")
+
+plot_grid(h1, h2, s1, nrow = 2)
+```
+
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-6-1.png)
+
+We will use standardized expression values.
 
 ### Expression across populations
 
 ``` r
-ggplot(hla_expression, aes(reorder(pop, tpm), tpm)) +
-    geom_quasirandom(aes(color = pop), method = "smiley") +
+sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
+    read_tsv() %>%
+    select(-ena_id)
+
+expression_df <- left_join(hla_expression_std, sample_info, by = "sampleid") %>%
+    select(sampleid, population, sex, lab, value)
+
+
+ggplot(expression_df, aes(reorder(population, value), value)) +
+    geom_quasirandom(aes(color = population), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
     scale_color_colorblind() +
     theme_bw() +
-    labs(x = NULL, y = "TPM")
+    labs(x = NULL, y = "Std TPM")
 ```
 
-![](hla_herit_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-7-1.png)
 
 ### Expression across laboratories
 
 ``` r
-ggplot(hla_expression, aes(reorder(lab, tpm), tpm)) +
+ggplot(expression_df, aes(reorder(lab, value), value)) +
     geom_quasirandom(aes(color = lab), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
     theme_bw() +
-    labs(x = NULL, y = "TPM")
+    labs(x = NULL, y = "Std TPM")
 ```
 
-![](hla_herit_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-8-1.png)
 
 ### Expression between males and females
 
 ``` r
-ggplot(hla_expression, aes(reorder(sex, tpm), tpm)) +
+ggplot(expression_df, aes(reorder(sex, value), value)) +
     geom_quasirandom(aes(color = sex), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
     theme_bw() +
-    labs(x = NULL, y = "TPM")
+    labs(x = NULL, y = "Std TPM")
 ```
 
-![](hla_herit_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-9-1.png)
 
-Here we got to evaluate whether such differences across groupings are
-adequate for an analysis with the combined dataset, or whether they can
-be accounted for by using covariates.
+Here we got to evaluate whether such differences across groupings are adequate for an analysis with the combined dataset, or whether they can be accounted for by using covariates.
 
-Before we continue, we need to transform our phenotype data.frame into
-an “Annotated data frame”, which is a data structure provided by
-`Biobase`. This means that we have to add metadata to our
-`hla_expression` data.frame, and include a `sample.id` column as a
-requirement for `GENESIS`. Since we do not have multiple samples for the
-same individuals, we will just create the `sample.id` column as a copy
-of `subject_id`.
+Before we continue, we need to transform our phenotype data.frame into an "Annotated data frame", which is a data structure provided by `Biobase`. This means that we have to add metadata to our `expression_df` data.frame, and include a `sample.id` column as a requirement for `GENESIS`. Since we do not have multiple samples for the same individuals, we will just create the `sample.id` column as a copy of `sampleid`.
 
 ``` r
 metadata <- 
@@ -237,11 +272,10 @@ metadata <-
                                     "PC 3",
                                     "expression levels in TPM"))
 
-annotphen <- hla_expression %>%
-    mutate(sample.id = subject_id) %>%
-    left_join(select(pcadf, sampleid, V1:V3), 
-              by = c("subject_id" = "sampleid")) %>%
-    select(sample.id, subject_id, lab, sex, pop, V1, V2, V3, tpm) %>%
+annotphen <- expression_df %>%
+    mutate(sample.id = sampleid) %>%
+    left_join(select(pcadf, sampleid, V1:V3), by = "sampleid") %>%
+    select(sample.id, sampleid, lab, sex, population, V1, V2, V3, value) %>%
     as.data.frame() %>%
     AnnotatedDataFrame(metadata)
 
@@ -249,53 +283,46 @@ annotphen <- hla_expression %>%
 varMetadata(annotphen)
 ```
 
-``` 
-                       labelDescription
-sample.id             sample identifier
-subject_id           subject identifier
-lab        laboratory of RNA sequencing
-sex                       subject's sex
-pop                subject's population
-V1                                 PC 1
-V2                                 PC 2
-V3                                 PC 3
-tpm            expression levels in TPM
-```
+                           labelDescription
+    sample.id             sample identifier
+    sampleid             subject identifier
+    lab        laboratory of RNA sequencing
+    sex                       subject's sex
+    population         subject's population
+    V1                                 PC 1
+    V2                                 PC 2
+    V3                                 PC 3
+    value          expression levels in TPM
 
 ``` r
 # access the data with the pData() function
 head(pData(annotphen))
 ```
 
-``` 
-  sample.id subject_id      lab    sex pop          V1            V2           V3     tpm
-1   HG00096    HG00096    UNIGE   male GBR -0.02409590  1.178854e-03 -0.005208341 1604.34
-2   HG00097    HG00097     LUMC female GBR -0.02433438 -9.808199e-04 -0.007818318 1342.20
-3   HG00099    HG00099     HMGU female GBR -0.02452840 -2.650025e-05 -0.007551133  921.60
-4   HG00100    HG00100 CNAG_CRG female GBR -0.02342908  1.718510e-02  0.007413764 1392.66
-5   HG00101    HG00101    UNIGE   male GBR -0.02409977  1.364934e-03 -0.003502374 1082.02
-6   HG00102    HG00102    MPIMG female GBR -0.02474157 -2.891527e-03 -0.006582548 1053.15
-```
+      sample.id sampleid      lab    sex population          V1            V2           V3      value
+    1   HG00096  HG00096    UNIGE   male        GBR -0.02409590  1.178854e-03 -0.005208341  0.0620013
+    2   HG00097  HG00097     LUMC female        GBR -0.02433438 -9.808199e-04 -0.007818318 -0.4860010
+    3   HG00099  HG00099     HMGU female        GBR -0.02452840 -2.650025e-05 -0.007551133 -1.9096400
+    4   HG00100  HG00100 CNAG_CRG female        GBR -0.02342908  1.718510e-02  0.007413764 -0.4235280
+    5   HG00101  HG00101    UNIGE   male        GBR -0.02409977  1.364934e-03 -0.003502374 -1.4375500
+    6   HG00102  HG00102    MPIMG female        GBR -0.02474157 -2.891527e-03 -0.006582548 -1.3484100
 
 ## GRM
 
 ### GCTA
 
-We will use the `SNPRelate` package to compute a GRM. We will begin with
-the GCTA method.
+We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
 
 ``` r
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
 ```
 
-``` 
-                                                            FileName ReadOnly  State
-1 /raid/genevol/users/vitor/heritability/data/kgp/allchrs_pruned.gds     TRUE closed
-```
+                                                    FileName ReadOnly  State
+    1 /raid/genevol/heritability/data/kgp/allchrs_pruned.gds     TRUE closed
 
 ``` r
-pruned <- seqOpen("/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+pruned <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 
 # Computar a GRM
 grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
@@ -308,15 +335,15 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Thu Mar 18 13:57:42 2021    (internal increment: 8752)
-    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 40s
-    Thu Mar 18 13:58:22 2021    Done.
+    Tue Mar 23 21:09:49 2021    (internal increment: 8752)
+
+    [..................................................]  0%, ETC: ---        
+    [==================================================] 100%, completed, 1.1m
+    Tue Mar 23 21:10:55 2021    Done.
 
 We extract and rename the matrix
 
 ``` r
-sample_ids <- seqGetData(pruned, "sample.id")
-
 grm <- grm_obj$grm
 rownames(grm) <- sample_ids
 colnames(grm) <- sample_ids
@@ -325,25 +352,22 @@ colnames(grm) <- sample_ids
 grm[1:5, 1:5]
 ```
 
-``` 
-            HG00096      HG00097      HG00099     HG00100     HG00101
-HG00096 0.956687356 0.0022034937 0.0023660411 0.001431433 0.003642691
-HG00097 0.002203494 0.9754513066 0.0007980224 0.003025820 0.003069123
-HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
-HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
-HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
-```
+                HG00096      HG00097      HG00099     HG00100     HG00101
+    HG00096 0.956687356 0.0022034937 0.0023660411 0.001431433 0.003642691
+    HG00097 0.002203494 0.9754513066 0.0007980224 0.003025820 0.003069123
+    HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
+    HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
+    HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
 
 ### Distribution of the GRM diagonal values
 
-![](hla_herit_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-13-1.png)
 
 ### GRM off-diagonal values
 
-\* diagonal is set to NA so we can better see the range for off-diagonal
-(much smaller) values
+\* diagonal is set to NA so we can better see the range for off-diagonal (much smaller) values
 
-![](hla_herit_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-14-1.png)
 
 ### GRM eigenvalues
 
@@ -355,14 +379,12 @@ range(eig$values)
 
     [1] -9.687702e-14  5.794577e+00
 
-![](hla_herit_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-16-1.png)
 
-Because we have a small negative eigenvalue, the code for model fitting
-below will fail. Therefore we need to apply a correction to ensure our
-GRM is positive definite.
+Because we have a small negative eigenvalue, the code for model fitting below will fail. Therefore we need to apply a correction to ensure our GRM is positive definite.
 
 ``` r
-eig$values[eig$values < 1e-10] <- 1e-10
+eig$values <- eig$values + abs(min(eig$values))
 grm_pd <- eig$vectors %*% diag(eig$values) %*% t(eig$vectors)
 
 rownames(grm_pd) <- rownames(grm)
@@ -370,114 +392,79 @@ colnames(grm_pd) <- colnames(grm)
 grm_pd[1:5, 1:5]
 ```
 
-``` 
-            HG00096      HG00097      HG00099     HG00100     HG00101
-HG00096 0.956687356 0.0022034937 0.0023660411 0.001431433 0.003642691
-HG00097 0.002203494 0.9754513066 0.0007980224 0.003025820 0.003069123
-HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
-HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
-HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
-```
+                HG00096      HG00097      HG00099     HG00100     HG00101
+    HG00096 0.956687356 0.0022034937 0.0023660411 0.001431433 0.003642691
+    HG00097 0.002203494 0.9754513066 0.0007980224 0.003025820 0.003069123
+    HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
+    HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
+    HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
 
 ## Fitting the Null model
 
-The first step in finding genetic variants which are associated with a
-phenotype is preparing null model.
+The first step in finding genetic variants which are associated with a phenotype is preparing null model.
 
-We fit a null model which adjusts gene expression according to
-covariates such as population of origin, laboratory of sequencing, and
-sex. We also account for the relatedness between individuals (GRM).
+We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
 
 ``` r
 mod_null <- fitNullModel(annotphen, 
-                         outcome = "tpm", 
-                         covars = c("lab", "sex", "pop", "V1", "V2", "V3"),
+                         outcome = "value", 
+                         covars = c("lab", "sex", "V1", "V2"),
                          cov.mat = grm_pd)
-
-# Computing Variance Component Estimates...
-# Sigma^2_A     log-lik     RSS
-# [1] 90450.0733329 90450.0733329 -3180.1677469     0.7946036
-# [1]  1.299377e+05  3.971180e+04 -3.179600e+03  8.504499e-01
-# [1]  1.471800e+05  1.542620e+04 -3.179408e+03  8.898544e-01
-# [1]  1.558534e+05  2.022088e+03 -3.179333e+03  9.183829e-01
-# [1]    157038.422         0.000     -7453.163 396731067.636
-# [1]  4.859942e+04  0.000000e+00 -7.602906e+03  2.572755e+09
-# [1]  2.237060e+04  0.000000e+00 -7.674987e+03  7.814267e+09
-# [1]  4.924574e+03  0.000000e+00           NaN -4.070946e+10
-# [1]  1.581044e+03  0.000000e+00 -7.177704e+03  1.094249e+10
-# [1]  6.968396e+02  0.000000e+00 -7.597091e+03  1.746475e+11
-# [1]      80354.67          0.00           NaN -465145381.86
-# [1]   6709000         0       NaN -31366924
-# [1] 1926401772.18          0.00           NaN     -44765.28
-# [1]  4.129558e+10  0.000000e+00 -7.704039e+03  4.845637e+03
-# [1]  5.117687e+12  0.000000e+00 -7.021044e+03  1.631345e+00
-# [1]  6.099762e+16  0.000000e+00           NaN -1.856986e-03
-# [1]  2.610447e+16  0.000000e+00 -7.117544e+03  5.009863e-04
-# [1]  2.837112e+15  0.000000e+00 -7.746238e+03  8.582223e-02
-# [1]  1.508941e+21  0.000000e+00 -7.328298e+03  2.310102e-08
-# [1]  5.601089e+32  0.000000e+00           NaN -5.510454e-19
-# [1]  1.263340e+55  0.000000e+00           NaN -1.149428e-41
-# [1]  1.469691e+100   0.000000e+00  -7.751168e+03   1.695565e-86
-# [1]  7.055943e+99  0.000000e+00           NaN -4.475945e-86
-# [1]  1.797777e+189   0.000000e+00            NaN -1.101004e-175
-# Error in solve.default(AI, score) : 
-#   Lapack routine dgesv: system is exactly singular: U[1,1] = 0
-# In addition: There were 18 warnings (use warnings() to see them)
-# > warnings()
-# Warning messages:
-# 1: In log(2 * pi * RSS) : NaNs produced
-# 2: In log(2 * pi * RSS) : NaNs produced
-# 3: In log(2 * pi * RSS) : NaNs produced
-# 4: In log(2 * pi * RSS) : NaNs produced
-# 5: In log(2 * pi * RSS) : NaNs produced
-# 6: In log(2 * pi * RSS) : NaNs produced
-# 7: In log(2 * pi * RSS) : NaNs produced
-# 8: In log(2 * pi * RSS) : NaNs produced
-# 9: In log(2 * pi * RSS) : NaNs produced
-# 10: In log(2 * pi * RSS) : NaNs produced
-# 11: In log(2 * pi * RSS) : NaNs produced
-# 12: In log(2 * pi * RSS) : NaNs produced
-# 13: In log(2 * pi * RSS) : NaNs produced
-# 14: In log(2 * pi * RSS) : NaNs produced
-# 15: In log(2 * pi * RSS) : NaNs produced
-# 16: In log(2 * pi * RSS) : NaNs produced
-# 17: In log(2 * pi * RSS) : NaNs produced
-# 18: In log(2 * pi * RSS) : NaNs produced
 ```
 
-Now that we have a Null model adjusting expression levels for
-population, sex, laboratory, population genetic structure, and the
-relatedness, we can test for the association of the genetic variants
-with expression levels.
+    [1]    0.4996713    0.4996713 -572.3989493    0.7609524
+    [1]    0.7946567    0.1283191 -571.4559448    0.8274359
+    [1]    0.85256910    0.04770545 -571.29695132    0.84968960
+    [1]    0.87353098    0.01740093 -571.24256294    0.85920572
+    [1]  8.826167e-01  4.040699e-03 -5.712196e+02  8.636316e-01
+    [1]  8.847395e-01  8.939585e-04 -5.712143e+02  8.646985e-01
+    [1]  8.852615e-01  1.185643e-04 -5.712130e+02  8.649628e-01
 
-The first step is to create a `SeqVarData` object including both the GDS
-(genotypes) and the Annotated data.frame (phenotypes).
+\*Note: if we include PC3, we get an error "the leading minor of order 4 is not positive definite"
 
-Then we will use the `assocTestSingle` function to assess the effect of
-each variant.
+Now that we have a Null model adjusting expression levels for sex, laboratory, population genetic structure, and relatedness, we can test for the association of the genetic variants with expression levels.
+
+The first step is to create a `SeqVarData` object including both the GDS (genotypes) and the Annotated data.frame (phenotypes).
+
+Then we will use the `assocTestSingle` function to assess the effect of each variant.
 
 ``` r
 # order individuals according to GDS
 pData(annotphen) <- pData(annotphen) %>%
-    mutate(subject_id = factor(subject_id, levels = seqGetData(pruned, "sample.id"))) %>%
-    arrange(subject_id)
+    mutate(sampleid = factor(sampleid, levels = seqGetData(pruned, "sample.id"))) %>%
+    arrange(sampleid)
 
 # create SeqVarData object and iterator
 seqData <- SeqVarData(pruned, sampleData = annotphen)
-iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
+iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 
 # test
 assoc <- assocTestSingle(iterator, mod_null)
+```
 
+    # of selected samples: 445
+
+``` r
 head(assoc)
 ```
 
-`GENESIS` includes the `varCompCI` to compute the proportion of variance
-explained (heritability) by each random effect, with a 95% CI:
+      variant.id chr   pos allele.index n.obs       freq MAC      Score  Score.SE Score.Stat Score.pval         Est     Est.SE          PVE
+    1          1   1 10177            1   445 0.42808989 381 -19.271134 11.178066 -1.7240133 0.08470545 -0.15423180 0.08946091 0.0078994072
+    2          2   1 10352            1   445 0.43932584 391   3.175980  9.276529  0.3423672 0.73207455  0.03690682 0.10779894 0.0003115284
+    3          6   1 11012            1   445 0.09213483  82 -10.672905  9.219664 -1.1576241 0.24701746 -0.12556034 0.10846382 0.0035616270
+    4          8   1 13110            1   445 0.04382022  39  -8.597626  6.339446 -1.3562110 0.17503203 -0.21393212 0.15774250 0.0048884125
+    5         10   1 13118            1   445 0.14382022 128  -5.262152 10.874035 -0.4839190 0.62844338 -0.04450225 0.09196219 0.0006223842
+    6         11   1 13273            1   445 0.12808989 114  10.593458 10.148607  1.0438337 0.29656234  0.10285487 0.09853569 0.0028958491
+
+`GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI:
 
 ``` r
-varCompCI(nullmod, prop = TRUE)
+varCompCI(mod_null, prop = TRUE)
 ```
+
+                  Proportion    Lower 95 Upper 95
+    V_A         0.9998660865 -0.07450015 2.074232
+    V_resid.var 0.0001339135 -1.07423232 1.074500
 
 ## Packages version
 
@@ -489,12 +476,12 @@ varCompCI(nullmod, prop = TRUE)
      os       Ubuntu 16.04.7 LTS          
      system   x86_64, linux-gnu           
      ui       X11                         
-     language (EN)                        
+     language en_US:en                    
      collate  en_US.UTF-8                 
      ctype    en_US.UTF-8                 
      tz       America/Sao_Paulo           
-     date     2021-03-18                  
-    
+     date     2021-03-24                  
+
     ─ Packages ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
      package          * version  date       lib source        
      assertthat         0.2.1    2019-03-21 [2] CRAN (R 4.0.2)
@@ -619,7 +606,7 @@ varCompCI(nullmod, prop = TRUE)
      yaml               2.2.1    2020-02-01 [2] CRAN (R 4.0.2)
      zlibbioc           1.36.0   2020-10-27 [1] Bioconductor  
      zoo                1.8-8    2020-05-02 [2] CRAN (R 4.0.2)
-    
+
     [1] /raid/genevol/users/vitor/R/x86_64-pc-linux-gnu-library/4.0
     [2] /usr/local/lib/R/site-library
     [3] /usr/lib/R/site-library

@@ -54,9 +54,9 @@ library(ggthemes)
 ### Concatenate GDS files for all chromosomes
 
 ```{r VcfToGds, eval=FALSE}
-gds_file <- "/home/vitor/heritability/data/kgp/allchrs.gds"
+gds_file <- "/raid/genevol/heritability/data/kgp/allchrs.gds"
 
-gds_list <- sprintf("/home/vitor/heritability/data/kgp/chr%d.gds", 1:22)
+gds_list <- sprintf("/raid/genevol/heritability/data/kgp/chr%d.gds", 1:22)
 
 seqMerge(gds_list, gds_file)
 ```
@@ -74,7 +74,7 @@ pruned <- snpgdsLDpruning(gds,
 prunedsnps <- unlist(pruned, use.names = FALSE)
 
 seqSetFilter(gds, variant.id = prunedsnps)
-seqExport(gds, "/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+seqExport(gds, "/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 seqClose(gds)
 ```
 
@@ -84,13 +84,14 @@ seqClose(gds)
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
 
-gds <- seqOpen("/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+gds <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+
+sample_ids <- seqGetData(gds, "sample.id")
 
 pca <- snpgdsPCA(gds, num.thread = 16L)
 
-pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
-    distinct(subject_id, pop) %>%
-    rename(sampleid = subject_id)
+pops <- read_tsv("/raid/genevol/heritability/data/geuvadis_metadata.tsv") %>%
+    distinct(sampleid, population)
 
 pcadf <- as.data.frame(pca$eigenvect) %>%
     as_tibble() %>%
@@ -99,7 +100,7 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
 ```
 
 ```{r pcaplot}
-p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
+p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
     geom_point() +
     scale_color_colorblind() +
     theme(panel.grid.minor = element_blank(),
@@ -107,13 +108,13 @@ p1 <- ggplot(pcadf, aes(V1, V2, color = pop)) +
           legend.key = element_rect(fill = "grey45")) +
     labs(color = "Population")
 
-p2 <- ggplot(pcadf, aes(V2, V3, color = pop)) +
+p2 <- ggplot(pcadf, aes(V2, V3, color = population)) +
     geom_point() +
     scale_color_colorblind() +
     theme(panel.grid.minor = element_blank(),
           panel.background = element_rect(fill = "grey45"))
 
-p3 <- ggplot(pcadf, aes(V3, V4, color = pop)) +
+p3 <- ggplot(pcadf, aes(V3, V4, color = population)) +
     geom_point() +
     scale_color_colorblind() +
     theme(panel.grid.minor = element_blank(),
@@ -131,44 +132,88 @@ plot_grid(p1 + theme(legend.position = "none"),
 ### Phenotypes (HLA-A expression in Geuvadis)
 
 ```{r}
-hla_expression <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
-    filter(gene_name == "HLA-A", subject_id %in% seqGetData(gds, "sample.id")) 
+hla_expression <- 
+    "/raid/genevol/heritability/data/geuvadis_expression.bed.gz" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
+
+hla_expression_std <- 
+    "/raid/genevol/heritability/data/geuvadis_expression_std.bed" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
 ```
+
+#### Comparing the distribution of raw vs. standardized expression values
+
+TPM values were quantile normal transformed by `QTLtools correct`.
+
+```{r}
+h1 <- ggplot(hla_expression, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "raw")
+
+h2 <- ggplot(hla_expression_std, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "standardized")
+
+s1 <- left_join(hla_expression, hla_expression_std, 
+          by = "sampleid", suffix = c("_raw", "_std")) %>%
+    ggplot(aes(value_raw, value_std)) +
+    geom_point() +
+    labs(x = "Raw", y = "Standardized")
+
+plot_grid(h1, h2, s1, nrow = 2)
+```
+
+We will use standardized expression values.
+
 
 ### Expression across populations
 
 ```{r}
-ggplot(hla_expression, aes(reorder(pop, tpm), tpm)) +
-    geom_quasirandom(aes(color = pop), method = "smiley") +
+sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
+    read_tsv() %>%
+    select(-ena_id)
+
+expression_df <- left_join(hla_expression_std, sample_info, by = "sampleid") %>%
+    select(sampleid, population, sex, lab, value)
+
+
+ggplot(expression_df, aes(reorder(population, value), value)) +
+    geom_quasirandom(aes(color = population), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
     scale_color_colorblind() +
     theme_bw() +
-    labs(x = NULL, y = "TPM")
+    labs(x = NULL, y = "Std TPM")
 ```
 
 ### Expression across laboratories
 
 ```{r}
-ggplot(hla_expression, aes(reorder(lab, tpm), tpm)) +
+ggplot(expression_df, aes(reorder(lab, value), value)) +
     geom_quasirandom(aes(color = lab), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
     theme_bw() +
-    labs(x = NULL, y = "TPM")
+    labs(x = NULL, y = "Std TPM")
 ```
 
 ### Expression between males and females
 
 ```{r}
-ggplot(hla_expression, aes(reorder(sex, tpm), tpm)) +
+ggplot(expression_df, aes(reorder(sex, value), value)) +
     geom_quasirandom(aes(color = sex), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
     theme_bw() +
-    labs(x = NULL, y = "TPM")
+    labs(x = NULL, y = "Std TPM")
 ```
 
 Here we got to evaluate whether such differences across groupings are adequate for an analysis with the combined dataset, or whether they can be accounted for by using covariates.
 
-Before we continue, we need to transform our phenotype data.frame into an "Annotated data frame", which is a data structure provided by `Biobase`. This means that we have to add metadata to our `hla_expression` data.frame, and include a `sample.id` column as a requirement for `GENESIS`. Since we do not have multiple samples for the same individuals, we will just create the `sample.id` column as a copy of `subject_id`.
+Before we continue, we need to transform our phenotype data.frame into an "Annotated data frame", which is a data structure provided by `Biobase`. This means that we have to add metadata to our `expression_df` data.frame, and include a `sample.id` column as a requirement for `GENESIS`. Since we do not have multiple samples for the same individuals, we will just create the `sample.id` column as a copy of `sampleid`.
 
 
 ```{r}
@@ -183,11 +228,10 @@ metadata <-
                                     "PC 3",
                                     "expression levels in TPM"))
 
-annotphen <- hla_expression %>%
-    mutate(sample.id = subject_id) %>%
-    left_join(select(pcadf, sampleid, V1:V3), 
-              by = c("subject_id" = "sampleid")) %>%
-    select(sample.id, subject_id, lab, sex, pop, V1, V2, V3, tpm) %>%
+annotphen <- expression_df %>%
+    mutate(sample.id = sampleid) %>%
+    left_join(select(pcadf, sampleid, V1:V3), by = "sampleid") %>%
+    select(sample.id, sampleid, lab, sex, population, V1, V2, V3, value) %>%
     as.data.frame() %>%
     AnnotatedDataFrame(metadata)
 
@@ -209,7 +253,7 @@ We will use the `SNPRelate` package to compute a GRM. We will begin with the GCT
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
 
-pruned <- seqOpen("/home/vitor/heritability/data/kgp/allchrs_pruned.gds")
+pruned <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 
 # Computar a GRM
 grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
@@ -217,8 +261,6 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
 
 We extract and rename the matrix
 ```{r}
-sample_ids <- seqGetData(pruned, "sample.id")
-
 grm <- grm_obj$grm
 rownames(grm) <- sample_ids
 colnames(grm) <- sample_ids
@@ -235,7 +277,7 @@ grm_df <- grm %>%
     pivot_longer(-id1, names_to = "id2") %>%
     left_join(pops, by = c("id1" = "sampleid")) %>%
     left_join(pops, by = c("id2" = "sampleid")) %>%
-    select(id1, id2, pop1 = pop.x, pop2 = pop.y, value)
+    select(id1, id2, pop1 = population.x, pop2 = population.y, value)
 
 grm_df %>%
     filter(id1 == id2) %>%
@@ -331,7 +373,7 @@ ggplot(tibble(i = 1:length(eig$values), value = eig$values), aes(value)) +
 Because we have a small negative eigenvalue, the code for model fitting below will fail. Therefore we need to apply a correction to ensure our GRM is positive definite.
 
 ```{r}
-eig$values[eig$values < 1e-10] <- 1e-10
+eig$values <- eig$values + abs(min(eig$values))
 grm_pd <- eig$vectors %*% diag(eig$values) %*% t(eig$vectors)
 
 rownames(grm_pd) <- rownames(grm)
@@ -348,78 +390,30 @@ The first step in finding genetic variants which are associated with a phenotype
 We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
 
 
-```{r eval=FALSE}
+```{r}
 mod_null <- fitNullModel(annotphen, 
-                         outcome = "tpm", 
-                         covars = c("lab", "sex", "pop", "V1", "V2", "V3"),
+                         outcome = "value", 
+                         covars = c("lab", "sex", "V1", "V2"),
                          cov.mat = grm_pd)
-
-# Computing Variance Component Estimates...
-# Sigma^2_A     log-lik     RSS
-# [1] 90450.0733329 90450.0733329 -3180.1677469     0.7946036
-# [1]  1.299377e+05  3.971180e+04 -3.179600e+03  8.504499e-01
-# [1]  1.471800e+05  1.542620e+04 -3.179408e+03  8.898544e-01
-# [1]  1.558534e+05  2.022088e+03 -3.179333e+03  9.183829e-01
-# [1]    157038.422         0.000     -7453.163 396731067.636
-# [1]  4.859942e+04  0.000000e+00 -7.602906e+03  2.572755e+09
-# [1]  2.237060e+04  0.000000e+00 -7.674987e+03  7.814267e+09
-# [1]  4.924574e+03  0.000000e+00           NaN -4.070946e+10
-# [1]  1.581044e+03  0.000000e+00 -7.177704e+03  1.094249e+10
-# [1]  6.968396e+02  0.000000e+00 -7.597091e+03  1.746475e+11
-# [1]      80354.67          0.00           NaN -465145381.86
-# [1]   6709000         0       NaN -31366924
-# [1] 1926401772.18          0.00           NaN     -44765.28
-# [1]  4.129558e+10  0.000000e+00 -7.704039e+03  4.845637e+03
-# [1]  5.117687e+12  0.000000e+00 -7.021044e+03  1.631345e+00
-# [1]  6.099762e+16  0.000000e+00           NaN -1.856986e-03
-# [1]  2.610447e+16  0.000000e+00 -7.117544e+03  5.009863e-04
-# [1]  2.837112e+15  0.000000e+00 -7.746238e+03  8.582223e-02
-# [1]  1.508941e+21  0.000000e+00 -7.328298e+03  2.310102e-08
-# [1]  5.601089e+32  0.000000e+00           NaN -5.510454e-19
-# [1]  1.263340e+55  0.000000e+00           NaN -1.149428e-41
-# [1]  1.469691e+100   0.000000e+00  -7.751168e+03   1.695565e-86
-# [1]  7.055943e+99  0.000000e+00           NaN -4.475945e-86
-# [1]  1.797777e+189   0.000000e+00            NaN -1.101004e-175
-# Error in solve.default(AI, score) : 
-#   Lapack routine dgesv: system is exactly singular: U[1,1] = 0
-# In addition: There were 18 warnings (use warnings() to see them)
-# > warnings()
-# Warning messages:
-# 1: In log(2 * pi * RSS) : NaNs produced
-# 2: In log(2 * pi * RSS) : NaNs produced
-# 3: In log(2 * pi * RSS) : NaNs produced
-# 4: In log(2 * pi * RSS) : NaNs produced
-# 5: In log(2 * pi * RSS) : NaNs produced
-# 6: In log(2 * pi * RSS) : NaNs produced
-# 7: In log(2 * pi * RSS) : NaNs produced
-# 8: In log(2 * pi * RSS) : NaNs produced
-# 9: In log(2 * pi * RSS) : NaNs produced
-# 10: In log(2 * pi * RSS) : NaNs produced
-# 11: In log(2 * pi * RSS) : NaNs produced
-# 12: In log(2 * pi * RSS) : NaNs produced
-# 13: In log(2 * pi * RSS) : NaNs produced
-# 14: In log(2 * pi * RSS) : NaNs produced
-# 15: In log(2 * pi * RSS) : NaNs produced
-# 16: In log(2 * pi * RSS) : NaNs produced
-# 17: In log(2 * pi * RSS) : NaNs produced
-# 18: In log(2 * pi * RSS) : NaNs produced
 ```
 
-Now that we have a Null model adjusting expression levels for population, sex, laboratory, population genetic structure, and the relatedness, we can test for the association of the genetic variants with expression levels.
+\*Note: if we include PC3, we get an error "the leading minor of order 4 is not positive definite"
+
+Now that we have a Null model adjusting expression levels for sex, laboratory, population genetic structure, and relatedness, we can test for the association of the genetic variants with expression levels.
 
 The first step is to create a `SeqVarData` object including both the GDS (genotypes) and the Annotated data.frame (phenotypes). 
 
 Then we will use the `assocTestSingle` function to assess the effect of each variant.
 
-```{r eval=FALSE}
+```{r}
 # order individuals according to GDS
 pData(annotphen) <- pData(annotphen) %>%
-    mutate(subject_id = factor(subject_id, levels = seqGetData(pruned, "sample.id"))) %>%
-    arrange(subject_id)
+    mutate(sampleid = factor(sampleid, levels = seqGetData(pruned, "sample.id"))) %>%
+    arrange(sampleid)
 
 # create SeqVarData object and iterator
 seqData <- SeqVarData(pruned, sampleData = annotphen)
-iterator <- SeqVarBlockIterator(seqData, verbose = FALSE)
+iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 
 # test
 assoc <- assocTestSingle(iterator, mod_null)
@@ -430,8 +424,8 @@ head(assoc)
 
 `GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
 
-```{r eval=FALSE}
-varCompCI(nullmod, prop = TRUE)
+```{r}
+varCompCI(mod_null, prop = TRUE)
 ```
 
 

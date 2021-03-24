@@ -42,6 +42,7 @@ library(tidyverse)
 library(SeqArray) 
 library(SeqVarTools) 
 library(SNPRelate)
+library(GENESIS)
 ```
 
 
@@ -77,10 +78,12 @@ seqClose(gds)
 
 ```{r}
 gds <- seqOpen("./data/kgp/allchrs_pruned.gds")
+
 pca <- snpgdsPCA(gds)
 
 pops <- read_tsv("/raid/genevol/heritability/hla_expression.tsv") %>%
-    select(sampleid = 1, 2:3)
+    distinct(subject_id, population) %>%
+    rename(sampleid = subject_id)
 
 pcadf <- as.data.frame(pca$eigenvect) %>%
     as_tibble() %>%
@@ -99,8 +102,9 @@ We use the KING algorithm to obtain kinship estimates. KING is robust to populat
 king <- snpgdsIBDKING(gds)
 
 kinship <- snpgdsIBDSelection(king) %>%
-    left_join(distinct(select(pops, 1, pop1 = 2)), by = c("ID1" = "sampleid")) %>%
-    left_join(distinct(select(pops, 1, pop2 = 2)), by = c("ID2" = "sampleid")) %>%
+    as_tibble() %>%
+    left_join(select(pops, 1, pop1 = 2), by = c("ID1" = "sampleid")) %>%
+    left_join(select(pops, 1, pop2 = 2), by = c("ID2" = "sampleid")) %>%
     mutate(pop_pair = paste(pmin(pop1, pop2), pmax(pop1, pop2), sep = "-"))
 ```
 
@@ -126,4 +130,39 @@ ggplot(kinship, aes(kinship, pop_pair)) +
     ggridges::geom_density_ridges() +
     labs(y = NULL, title = "Density of kinship values per population pair")
 ```
+
+### PC-AIR
+
+
+*Obs: not working because, given the kinship threshold, it only finds 14 unrelated individuals*
+
+```{r}
+kingmat <- king$kinship
+rownames(kingmat) <- colnames(kingmat) <- king$sample.id
+
+pc_air <- pcair(gds,
+                kinobj = kingmat,
+                kin.thresh = 2^(-9/2), 
+                divobj = kingmat, 
+                div.thresh = -2^(-9/2), 
+                verbose = TRUE)
+```
+
+
+```{r}
+library(GGally)
+
+pcair_df <- as.data.frame(pc_air$vectors) %>%
+    rownames_to_column("sample.id") %>%
+    as_tibble() %>%
+    setNames(sub("^(V)", "PC", names(.))) %>%
+    left_join(pops, by = c("sample.id" = "sampleid")) %>%
+    select(sample_id = sample.id, population, PC1:PC12)
+
+ggparcoord(pcair_df, columns = 3:10, 
+           groupColumn = "population", scale = "uniminmax") +
+    xlab("PC") + 
+    ylab("")
+```
+
 
