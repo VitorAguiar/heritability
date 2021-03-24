@@ -382,7 +382,7 @@ iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 # test
 assoc <- assocTestSingle(iterator, mod_null)
 
-assoc
+head(assoc, 10)
 ```
 
 
