@@ -3,6 +3,7 @@ Heritability
 
 ``` r
 library(tidyverse)
+library(tidytext)
 library(SeqArray) 
 library(SeqVarTools) 
 library(SNPRelate)
@@ -106,12 +107,12 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 24 10:32:14 2021    (internal increment: 8752)
+    Wed Mar 31 10:28:56 2021    (internal increment: 8752)
 
     [..................................................]  0%, ETC: ---        
-    [==================================================] 100%, completed, 43s
-    Wed Mar 24 10:32:57 2021    Begin (eigenvalues and eigenvectors)
-    Wed Mar 24 10:32:57 2021    Done.
+    [==================================================] 100%, completed, 36s
+    Wed Mar 31 10:29:32 2021    Begin (eigenvalues and eigenvectors)
+    Wed Mar 31 10:29:32 2021    Done.
 
 ``` r
 pops <- read_tsv("/raid/genevol/heritability/data/geuvadis_metadata.tsv") %>%
@@ -223,7 +224,7 @@ head(pData(annotphen))
 
 ## GRM
 
-### GCTA
+### GCTA vs Weir&Gouget
 
 We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
 
@@ -239,7 +240,7 @@ gdsfmt::showfile.gds(closeall = TRUE)
 pruned <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 
 # Computar a GRM
-grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
+grm_gcta_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
 ```
 
     Genetic Relationship Matrix (GRM, GCTA):
@@ -249,29 +250,40 @@ grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 24 10:33:03 2021    (internal increment: 8752)
+    Wed Mar 31 10:29:38 2021    (internal increment: 8752)
 
     [..................................................]  0%, ETC: ---        
-    [==================================================] 100%, completed, 49s
-    Wed Mar 24 10:33:52 2021    Done.
+    [==================================================] 100%, completed, 39s
+    Wed Mar 31 10:30:17 2021    Done.
+
+``` r
+grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
+```
+
+    Genetic Relationship Matrix (GRM, IndivBeta):
+    Calculating allele counts/frequencies ...
+    # of selected variants: 2,195,733
+        # of samples: 445
+        # of SNVs: 2,195,733
+        using 16 threads
+    CPU capabilities: Double-Precision SSE2
+    Wed Mar 31 10:30:20 2021    (internal increment: 65536)
+
+    [..................................................]  0%, ETC: ---        
+    [==================================================] 100%, completed, 9s
+    Wed Mar 31 10:30:29 2021    Done.
 
 We extract and rename the matrix
 
 ``` r
-grm <- grm_obj$grm
-rownames(grm) <- sample_ids
-colnames(grm) <- sample_ids
+grm_gcta <- grm_gcta_obj$grm
+rownames(grm_gcta) <- sample_ids
+colnames(grm_gcta) <- sample_ids
 
-# first 5 individuals:
-grm[1:5, 1:5]
+grm_wg <- grm_wg_obj$grm
+rownames(grm_wg) <- sample_ids
+colnames(grm_wg) <- sample_ids
 ```
-
-                HG00096      HG00097      HG00099     HG00100     HG00101
-    HG00096 0.956687356 0.0022034937 0.0023660411 0.001431433 0.003642691
-    HG00097 0.002203494 0.9754513066 0.0007980224 0.003025820 0.003069123
-    HG00099 0.002366041 0.0007980224 0.9609264716 0.009601814 0.005132164
-    HG00100 0.001431433 0.0030258202 0.0096018139 0.998632104 0.010114417
-    HG00101 0.003642691 0.0030691232 0.0051321635 0.010114417 0.938943766
 
 ### Distribution of the GRM diagonal values
 
@@ -283,6 +295,30 @@ grm[1:5, 1:5]
 
 ![](hla_herit_files/figure-markdown_github/unnamed-chunk-12-1.png)
 
+### Rankings of pairs of individuals
+
+``` r
+pair_ranks <- grm_df %>%
+  group_by(method) %>%
+  mutate(r = rank(value, ties.method = "first")) %>%
+  select(-value) %>%
+  pivot_wider(names_from = method, values_from = r) %>%
+  arrange(GCTA) %>%
+  mutate(col = case_when(xor(pop1 == "YRI", pop2 == "YRI") ~ "AFR-EUR",
+                         pop1 == "YRI" & pop2 == "YRI" ~ "AFR-AFR",
+                         pop1 != "YRI" & pop2 != "YRI" ~ "EUR-EUR"))
+
+ggplot(pair_ranks, aes(GCTA, `Weir & Goudet`)) +
+  geom_point(aes(color = col), alpha = .1) +
+  scale_color_manual(values = c("#046C9A", "#D69C4E", "#000000")) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
+  labs(color = "Population\npair")
+```
+
+![](hla_herit_files/figure-markdown_github/unnamed-chunk-13-1.png)
+
 ### Fitting the Null model
 
 The first step in finding genetic variants which are associated with a phenotype is preparing null model.
@@ -290,21 +326,27 @@ The first step in finding genetic variants which are associated with a phenotype
 We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
 
 ``` r
-mod_null <- fitNullModel(annotphen, 
+#mod_null_gcta <- fitNullModel(annotphen, 
+#                         outcome = "value", 
+#                         covars = c("lab", "sex"),
+#                         cov.mat = grm_gcta)
+
+mod_null_wg <- fitNullModel(annotphen, 
                          outcome = "value", 
-                         covars = c("lab", "sex", "V1", "V2"),
-                         cov.mat = grm)
+                         covars = c("lab", "sex"),
+                         cov.mat = grm_wg)
 ```
 
-    [1]    0.4996713    0.4996713 -572.3989493    0.7609524
-    [1]    0.7946567    0.1283191 -571.4559448    0.8274359
-    [1]    0.85256910    0.04770545 -571.29695132    0.84968960
-    [1]    0.87353098    0.01740093 -571.24256294    0.85920572
-    [1]  8.826167e-01  4.040699e-03 -5.712196e+02  8.636316e-01
-    [1]  8.847395e-01  8.939585e-04 -5.712143e+02  8.646985e-01
-    [1]  8.852615e-01  1.185643e-04 -5.712130e+02  8.649628e-01
-
-\*Note: if we include PC3, we get an error "the leading minor of order 445 is not positive definite"
+    [1]    0.4996713    0.4996713 -576.9746568    0.8415602
+    [1]    0.7804955    0.1868632 -576.4135856    0.9305427
+    [1]    0.94033611    0.04324574 -576.21739846    0.94848268
+    [1]    0.97725015    0.01096589 -576.17938167    0.95172463
+    [1]    0.9861944    0.0031750 -576.1705318    0.9524802
+    [1]    0.98841194    0.00124507 -576.16835898    0.95266587
+    [1]  9.895184e-01  2.823370e-04 -5.761673e+02  9.527583e-01
+    [1]    0.9897947    0.0000000 -576.1669613    0.9528318
+    [1]    0.9407967    0.0000000 -576.1669613    1.0024566
+    [1]    0.9431022    0.0000000 -576.1669613    1.0000060
 
 ### Association testing
 
@@ -325,7 +367,7 @@ seqData <- SeqVarData(pruned, sampleData = annotphen)
 iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 
 # test
-assoc <- assocTestSingle(iterator, mod_null)
+assoc <- assocTestSingle(iterator, mod_null_wg)
 ```
 
     # of selected samples: 445
@@ -334,29 +376,29 @@ assoc <- assocTestSingle(iterator, mod_null)
 head(assoc, 10)
 ```
 
-         variant.id chr     pos allele.index n.obs        freq MAC         Score   Score.SE    Score.Stat   Score.pval           Est     Est.SE          PVE
-    1             1   1   10177            1   445 0.428089888 381 -1.927113e+01 11.1780661 -1.7240132578 0.0847054498 -0.1542318006 0.08946091 7.899407e-03
-    2             2   1   10352            1   445 0.439325843 391  3.175980e+00  9.2765292  0.3423672198 0.7320745543  0.0369068229 0.10779894 3.115284e-04
-    3             6   1   11012            1   445 0.092134831  82 -1.067291e+01  9.2196640 -1.1576241195 0.2470174620 -0.1255603375 0.10846382 3.561627e-03
-    4             8   1   13110            1   445 0.043820225  39 -8.597626e+00  6.3394456 -1.3562110370 0.1750320313 -0.2139321188 0.15774250 4.888413e-03
-    5            10   1   13118            1   445 0.143820225 128 -5.262152e+00 10.8740346 -0.4839189645 0.6284433807 -0.0445022460 0.09196219 6.223842e-04
-    6            11   1   13273            1   445 0.128089888 114  1.059346e+01 10.1486070  1.0438336959 0.2965623388  0.1028548746 0.09853569 2.895849e-03
-    7            14   1   13445            1   445 0.001123596   1  2.797633e-04  1.0215946  0.0002738496 0.9997814996  0.0002680610 0.97886190 1.993139e-10
-    8            16   1   13494            1   445 0.001123596   1  3.714169e-01  1.0479487  0.3544227924 0.7230220559  0.3382062527 0.95424521 3.338540e-04
-    9            20   1   14604            1   445 0.150561798 134 -9.632020e+00 10.5824489 -0.9101881917 0.3627232705 -0.0860092218 0.09449609 2.201789e-03
-    10           24   1   14933            1   445 0.041573034  37  4.380638e+00  6.2722052  0.6984207150 0.4849141253  0.1113517003 0.15943356 1.296425e-03
+       variant.id chr   pos allele.index n.obs        freq MAC         Score  Score.SE   Score.Stat Score.pval          Est     Est.SE          PVE
+    1           1   1 10177            1   445 0.428089888 381 -17.096720209 12.018944 -1.422481061 0.15488665 -0.118353248 0.08320199 4.630298e-03
+    2           2   1 10352            1   445 0.439325843 391   4.638098246  9.651787  0.480542968 0.63084136  0.049787980 0.10360776 5.284214e-04
+    3           6   1 11012            1   445 0.092134831  82 -10.667433273  9.894223 -1.078147607 0.28096789 -0.108967381 0.10106907 2.659943e-03
+    4           8   1 13110            1   445 0.043820225  39 -11.421733009  6.789110 -1.682360748 0.09249891 -0.247802823 0.14729470 6.476706e-03
+    5          10   1 13118            1   445 0.143820225 128  -7.468549658 11.534883 -0.647475128 0.51732449 -0.056131921 0.08669356 9.593170e-04
+    6          11   1 13273            1   445 0.128089888 114  10.587377639 10.898274  0.971472838 0.33131287  0.089140060 0.09175764 2.159620e-03
+    7          14   1 13445            1   445 0.001123596   1   0.008046673  1.147702  0.007011115 0.99440599  0.006108827 0.87130609 1.124838e-07
+    8          16   1 13494            1   445 0.001123596   1   0.531436751  1.155193  0.460041612 0.64548635  0.398237954 0.86565638 4.842952e-04
+    9          20   1 14604            1   445 0.150561798 134  -9.005681631 11.025875 -0.816777082 0.41405583 -0.074078213 0.09069575 1.526592e-03
+    10         24   1 14933            1   445 0.041573034  37   4.511022584  6.639190  0.679453753 0.49685040  0.102339856 0.15062078 1.056418e-03
 
 ### Heritability
 
 `GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI:
 
 ``` r
-varCompCI(mod_null, prop = TRUE)
+varCompCI(mod_null_wg, prop = TRUE)
 ```
 
-                  Proportion    Lower 95 Upper 95
-    V_A         0.9998660865 -0.07450015 2.074232
-    V_resid.var 0.0001339135 -1.07423232 1.074500
+                Proportion Lower 95 Upper 95
+    V_A                  1        1        1
+    V_resid.var          0       NA       NA
 
 ## Package versions
 
@@ -372,7 +414,7 @@ varCompCI(mod_null, prop = TRUE)
      collate  en_US.UTF-8                 
      ctype    en_US.UTF-8                 
      tz       America/Sao_Paulo           
-     date     2021-03-24                  
+     date     2021-03-31                  
 
     ─ Packages ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
      package          * version  date       lib source        
@@ -430,6 +472,7 @@ varCompCI(mod_null, prop = TRUE)
      httr               1.4.2    2020-07-20 [2] CRAN (R 4.0.2)
      IRanges            2.24.1   2020-12-12 [1] Bioconductor  
      iterators          1.0.12   2019-07-26 [2] CRAN (R 4.0.2)
+     janeaustenr        0.1.5    2017-06-10 [1] CRAN (R 4.0.2)
      jsonlite           1.7.2    2020-12-09 [1] CRAN (R 4.0.2)
      knitr              1.31     2021-01-27 [1] CRAN (R 4.0.2)
      labeling           0.4.2    2020-10-20 [1] CRAN (R 4.0.2)
@@ -478,6 +521,7 @@ varCompCI(mod_null, prop = TRUE)
      SeqArray         * 1.30.0   2020-10-27 [1] Bioconductor  
      SeqVarTools      * 1.28.1   2020-11-20 [1] Bioconductor  
      sessioninfo        1.1.1    2018-11-05 [2] CRAN (R 4.0.2)
+     SnowballC          0.7.0    2020-04-01 [1] CRAN (R 4.0.2)
      SNPRelate        * 1.24.0   2020-10-27 [1] Bioconductor  
      SparseM            1.78     2019-12-13 [2] CRAN (R 4.0.2)
      stringi            1.5.3    2020-09-09 [1] CRAN (R 4.0.2)
@@ -487,7 +531,9 @@ varCompCI(mod_null, prop = TRUE)
      tibble           * 3.0.6    2021-01-29 [1] CRAN (R 4.0.2)
      tidyr            * 1.1.2    2020-08-27 [1] CRAN (R 4.0.2)
      tidyselect         1.1.0    2020-05-11 [2] CRAN (R 4.0.2)
+     tidytext         * 0.3.0    2021-01-06 [1] CRAN (R 4.0.2)
      tidyverse        * 1.3.0    2019-11-21 [1] CRAN (R 4.0.2)
+     tokenizers         0.2.1    2018-03-29 [1] CRAN (R 4.0.2)
      usethis            2.0.1    2021-02-10 [1] CRAN (R 4.0.2)
      vctrs              0.3.6    2020-12-17 [1] CRAN (R 4.0.2)
      vipor              0.4.5    2017-03-22 [1] CRAN (R 4.0.2)

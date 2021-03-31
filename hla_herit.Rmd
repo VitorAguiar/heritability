@@ -12,6 +12,7 @@ options(width = 999)
 
 ```{r pkgs}
 library(tidyverse)
+library(tidytext)
 library(SeqArray) 
 library(SeqVarTools) 
 library(SNPRelate)
@@ -236,7 +237,7 @@ head(pData(annotphen))
 
 ## GRM
 
-### GCTA
+### GCTA vs Weir&Gouget
 
 We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
 
@@ -247,22 +248,24 @@ gdsfmt::showfile.gds(closeall = TRUE)
 pruned <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 
 # Computar a GRM
-grm_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
+grm_gcta_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
+grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
 ```
 
 We extract and rename the matrix
 ```{r}
-grm <- grm_obj$grm
-rownames(grm) <- sample_ids
-colnames(grm) <- sample_ids
+grm_gcta <- grm_gcta_obj$grm
+rownames(grm_gcta) <- sample_ids
+colnames(grm_gcta) <- sample_ids
 
-# first 5 individuals:
-grm[1:5, 1:5]
+grm_wg <- grm_wg_obj$grm
+rownames(grm_wg) <- sample_ids
+colnames(grm_wg) <- sample_ids
 ```
 
 ### Distribution of the GRM diagonal values
-```{r, echo = FALSE}
-grm_df <- grm %>%
+```{r, echo = FALSE, fig.height = 3}
+grm_gcta_df <- grm_gcta %>%
     as.data.frame() %>%
     rownames_to_column("id1") %>%
     pivot_longer(-id1, names_to = "id2") %>%
@@ -270,10 +273,22 @@ grm_df <- grm %>%
     left_join(pops, by = c("id2" = "sampleid")) %>%
     select(id1, id2, pop1 = population.x, pop2 = population.y, value)
 
+grm_wg_df <- grm_wg %>%
+    as.data.frame() %>%
+    rownames_to_column("id1") %>%
+    pivot_longer(-id1, names_to = "id2") %>%
+    left_join(pops, by = c("id1" = "sampleid")) %>%
+    left_join(pops, by = c("id2" = "sampleid")) %>%
+    select(id1, id2, pop1 = population.x, pop2 = population.y, value)
+
+grm_df <- bind_rows("GCTA" = grm_gcta_df, "Weir & Goudet" = grm_wg_df, 
+                    .id = "method")
+
 grm_df %>%
     filter(id1 == id2) %>%
-    ggplot(aes(reorder(id1, value), value)) +
-    geom_bar(aes(fill = pop1, color = pop1), stat = "identity") +
+    ggplot(aes(reorder_within(id1, value, method), value)) +
+    geom_bar(aes(fill = pop1), stat = "identity", width = 1) +
+    facet_wrap(~method, scales = "free_x") +
     scale_fill_colorblind() +
     scale_color_colorblind() +
     geom_hline(yintercept = 1L, linetype = 2, size = 1, color = "grey") +
@@ -283,8 +298,7 @@ grm_df %>%
           axis.line.x = element_blank(),
           axis.ticks.x = element_blank(),
           axis.title.x = element_blank()) +
-    labs(color = "Population", fill = "Population",
-         title = "GRM diagonal values") 
+    labs(fill = "Population")
 ```
 
 ### GRM off-diagonal values
@@ -299,51 +313,102 @@ grm_offdiag <- grm_df %>%
            id2 = fct_inorder(id2))
 
 lines_v <- grm_offdiag %>%
-    group_by(pop1) %>%
+    group_by(method, pop1) %>%
     filter(1:n() == last(1:n())) %>%
     ungroup() %>%
-    select(id1, pop1)
+    select(method, id1, pop1)
 
 lines_h <- grm_offdiag %>%
-    group_by(pop2) %>%
+    group_by(method, pop2) %>%
     filter(1:n() == last(1:n())) %>%
     ungroup() %>%
-    select(id2, pop2)
+    select(method, id2, pop2)
 
 labels_v <- grm_offdiag %>%
-    group_by(pop1) %>%
+    group_by(method, pop1) %>%
     filter(1:n() == floor(median(1:n()))) %>%
     ungroup() %>%
-    select(id1, pop1)
+    select(method, id1, pop1)
 
 labels_h <- grm_offdiag %>%
-    group_by(pop2) %>%
+    group_by(method, pop2) %>%
     filter(1:n() == floor(median(1:n()))) %>%
     ungroup() %>%
-    select(id2, pop2)
+    select(method, id2, pop2)
 
-ggplot(grm_offdiag) +
+offdiag_gcta_p <- grm_offdiag %>%
+    filter(method == "GCTA") %>%
+    ggplot() +
     geom_tile(aes(id1, id2, fill = value)) +
     scale_fill_gradient2(name = "GRM values", 
-                         breaks = seq(round(min(grm_offdiag$value, na.rm = TRUE), 2),
-                                      round(max(grm_offdiag$value, na.rm = TRUE), 2),
+                         breaks = seq(round(min(grm_offdiag[grm_offdiag$method=="GCTA", ]$value, na.rm = TRUE), 2),
+                                      round(max(grm_offdiag[grm_offdiag$method=="GCTA", ]$value, na.rm = TRUE), 2),
                                       by = 0.02)) +
+    facet_wrap(~method) +
     theme_bw() +
     theme(panel.grid = element_blank(),
           axis.text = element_blank(),
           axis.line = element_blank(),
           axis.ticks = element_blank(),
           axis.title = element_blank(),
-          plot.margin = unit(c(1,0,1,1), "lines")) +
-    geom_hline(yintercept = lines_h$id2) +
-    geom_vline(xintercept = lines_v$id1) +
+          plot.margin = unit(c(1, 0, 1, 1), "lines")) +
+    geom_hline(yintercept = lines_h[lines_h$method == "GCTA",]$id2) +
+    geom_vline(xintercept = lines_v[lines_h$method == "GCTA",]$id1) +
     coord_cartesian(clip = "off") +
-    geom_text(data = labels_v, aes(x = id1, y = 0, label = pop1), 
+    geom_text(data = labels_v[labels_v$method == "GCTA",], aes(x = id1, y = 0, label = pop1), 
               vjust = 1.5) +
-    geom_text(data = labels_h, aes(y = id2, x = 0, label = pop2), 
-              vjust = -0.5, angle = 90) +
-    labs(title = "Off-diagonal values")
+    geom_text(data = labels_h[labels_h$method == "GCTA",], aes(y = id2, x = 0, label = pop2), 
+              vjust = -0.5, angle = 90)
+
+offdiag_wg_p <- grm_offdiag %>%
+    filter(method == "Weir & Goudet") %>%
+    ggplot() +
+    geom_tile(aes(id1, id2, fill = value)) +
+    scale_fill_gradient2(name = "GRM values", 
+                         breaks = seq(round(min(grm_offdiag[grm_offdiag$method=="Weir & Goudet", ]$value, na.rm = TRUE), 2),
+                                      round(max(grm_offdiag[grm_offdiag$method=="Weir & Goudet", ]$value, na.rm = TRUE), 2),
+                                      by = 0.1)) +
+    facet_wrap(~method) +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          axis.text = element_blank(),
+          axis.line = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          plot.margin = unit(c(1, 0, 1, 1), "lines")) +
+    geom_hline(yintercept = lines_h[lines_h$method == "Weir & Goudet",]$id2) +
+    geom_vline(xintercept = lines_v[lines_h$method == "Weir & Goudet",]$id1) +
+    coord_cartesian(clip = "off") +
+    geom_text(data = labels_v[labels_v$method == "Weir & Goudet",], aes(x = id1, y = 0, label = pop1), 
+              vjust = 1.5) +
+    geom_text(data = labels_h[labels_h$method == "Weir & Goudet",], aes(y = id2, x = 0, label = pop2), 
+              vjust = -0.5, angle = 90)
+
+plot_grid(offdiag_gcta_p, offdiag_wg_p, ncol = 1)
 ```
+
+### Rankings of pairs of individuals
+
+```{r}
+pair_ranks <- grm_df %>%
+  group_by(method) %>%
+  mutate(r = rank(value, ties.method = "first")) %>%
+  select(-value) %>%
+  pivot_wider(names_from = method, values_from = r) %>%
+  arrange(GCTA) %>%
+  mutate(col = case_when(xor(pop1 == "YRI", pop2 == "YRI") ~ "AFR-EUR",
+                         pop1 == "YRI" & pop2 == "YRI" ~ "AFR-AFR",
+                         pop1 != "YRI" & pop2 != "YRI" ~ "EUR-EUR"))
+
+ggplot(pair_ranks, aes(GCTA, `Weir & Goudet`)) +
+  geom_point(aes(color = col), alpha = .1) +
+  scale_color_manual(values = c("#046C9A", "#D69C4E", "#000000")) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
+  labs(color = "Population\npair")
+```
+
 
 
 ### Fitting the Null model
@@ -353,13 +418,17 @@ The first step in finding genetic variants which are associated with a phenotype
 We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
 
 ```{r}
-mod_null <- fitNullModel(annotphen, 
+#mod_null_gcta <- fitNullModel(annotphen, 
+#                         outcome = "value", 
+#                         covars = c("lab", "sex"),
+#                         cov.mat = grm_gcta)
+
+mod_null_wg <- fitNullModel(annotphen, 
                          outcome = "value", 
-                         covars = c("lab", "sex", "V1", "V2"),
-                         cov.mat = grm)
+                         covars = c("lab", "sex"),
+                         cov.mat = grm_wg)
 ```
 
-\*Note: if we include PC3, we get an error "the leading minor of order 445 is not positive definite"
 
 ### Association testing
 
@@ -380,7 +449,7 @@ seqData <- SeqVarData(pruned, sampleData = annotphen)
 iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 
 # test
-assoc <- assocTestSingle(iterator, mod_null)
+assoc <- assocTestSingle(iterator, mod_null_wg)
 
 head(assoc, 10)
 ```
@@ -391,7 +460,7 @@ head(assoc, 10)
 `GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
 
 ```{r}
-varCompCI(mod_null, prop = TRUE)
+varCompCI(mod_null_wg, prop = TRUE)
 ```
 
 
