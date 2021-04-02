@@ -11,16 +11,22 @@ options(width = 999)
 ```
 
 ```{r pkgs}
+# data processing
 library(tidyverse)
 library(tidytext)
+
+# genetic data
 library(SeqArray) 
 library(SeqVarTools) 
 library(SNPRelate)
 library(GENESIS)
 library(Biobase)
+
+# plotting
 library(cowplot)
 library(ggbeeswarm)
-library(ggthemes)
+library(ggsci)
+library(GGally)
 ```
 
 ## Sample:
@@ -63,7 +69,7 @@ pruned <- snpgdsLDpruning(gds,
 prunedsnps <- unlist(pruned, use.names = FALSE)
 
 seqSetFilter(gds, variant.id = prunedsnps)
-seqExport(gds, "/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+seqExport(gds, "/raid/genevol/heritability/data/kgp/all_inds/allchrs_pruned.gds")
 seqClose(gds)
 ```
 
@@ -73,7 +79,6 @@ seqClose(gds)
 We use the FASTQ files provided by the Geuvadis Consortium, and estimate expression with Salmon. We begin with the expression of HLA-A.
 
 Transcript Per Million (TPM) values are quantile normal transformed by `QTLtools correct`. Here is a comparison between raw and standardize TPMs:
-
 
 ```{r}
 # raw
@@ -135,32 +140,42 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
 
 ```{r pcaplot, echo=FALSE}
 p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
-    geom_point() +
-    scale_color_colorblind() +
-    theme(panel.grid.minor = element_blank(),
-          panel.background = element_rect(fill = "grey45"),
-          legend.key = element_rect(fill = "grey45")) +
-    labs(color = "Population")
+    geom_point(alpha = .5) +
+    scale_color_nejm() +
+    theme(panel.grid.minor = element_blank()) +
+    guides(color = guide_legend(title.position = "top",
+                                direction = "horizontal", 
+                                nrow = 2,
+                                override.aes = list(alpha = 1, size = 2.5)))
+
+p1_leg <- get_legend(p1)
+
+p1 <- p1 + theme(legend.position = "none")
 
 p2 <- ggplot(pcadf, aes(V2, V3, color = population)) +
-    geom_point() +
-    scale_color_colorblind() +
+    geom_point(alpha = .5) +
+    scale_color_nejm() +
     theme(panel.grid.minor = element_blank(),
-          panel.background = element_rect(fill = "grey45"))
+          legend.position = "none")
 
 p3 <- ggplot(pcadf, aes(V3, V4, color = population)) +
-    geom_point() +
-    scale_color_colorblind() +
+    geom_point(alpha = .5) +
+    scale_color_nejm() +
     theme(panel.grid.minor = element_blank(),
-          panel.background = element_rect(fill = "grey45"))
+          legend.position = "none")
 
-p_legend <- get_legend(p1)
+pgrid1 <- plot_grid(p1, p1_leg, p2, p3, nrow = 2)
 
-plot_grid(p1 + theme(legend.position = "none"), 
-          p_legend,
-          p2 + theme(legend.position = "none"), 
-          p3 + theme(legend.position = "none"),
-          nrow = 2)
+pgrid2 <- 
+  ggparcoord(pcadf, columns = 3:10,
+             groupColumn = "population", scale = "uniminmax", alpha = .5) +
+  scale_color_nejm() +
+  theme(panel.grid = element_blank(),
+        legend.position = "none") +
+  labs(x = NULL, y = "")
+
+
+plot_grid(pgrid1, NULL, pgrid2, ncol = 1, rel_heights = c(1, .1, .6))
 ```
 
 
@@ -173,18 +188,20 @@ sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
 
 expression_df <- left_join(hla_expression_std, sample_info, by = "sampleid") %>%
     select(sampleid, population, sex, lab, value)
+```
 
+```{r, echo=FALSE}
 ggplot(expression_df, aes(reorder(population, value), value)) +
     geom_quasirandom(aes(color = population), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
-    scale_color_colorblind() +
+    scale_color_nejm() +
     theme_bw() +
     labs(x = NULL, y = "Std TPM")
 ```
 
 ### HLA-A expression across laboratories
 
-```{r}
+```{r, echo = FALSE}
 ggplot(expression_df, aes(reorder(lab, value), value)) +
     geom_quasirandom(aes(color = lab), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
@@ -194,7 +211,7 @@ ggplot(expression_df, aes(reorder(lab, value), value)) +
 
 ### HLA-A expression between males and females
 
-```{r}
+```{r, echo=FALSE}
 ggplot(expression_df, aes(reorder(sex, value), value)) +
     geom_quasirandom(aes(color = sex), method = "smiley") +
     geom_boxplot(fill = NA, outlier.color = NA) +
@@ -237,9 +254,9 @@ head(pData(annotphen))
 
 ## GRM
 
-### GCTA vs Weir&Gouget
+### GCTA vs. Weir & Goudet
 
-We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
+We will use the `SNPRelate` package to compute the GRMs.
 
 ```{r}
 # Close GDS and open the pruned one
@@ -247,13 +264,14 @@ gdsfmt::showfile.gds(closeall = TRUE)
 
 pruned <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 
-# Computar a GRM
+# Compute GCTA GRM
 grm_gcta_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
-grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
-```
 
-We extract and rename the matrix
-```{r}
+# Compute Weir&Goudet GRM
+grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
+
+#Extract and rename the matrix
+
 grm_gcta <- grm_gcta_obj$grm
 rownames(grm_gcta) <- sample_ids
 colnames(grm_gcta) <- sample_ids
@@ -281,16 +299,25 @@ grm_wg_df <- grm_wg %>%
     left_join(pops, by = c("id2" = "sampleid")) %>%
     select(id1, id2, pop1 = population.x, pop2 = population.y, value)
 
-grm_df <- bind_rows("GCTA" = grm_gcta_df, "Weir & Goudet" = grm_wg_df, 
-                    .id = "method")
+grm_geuvadis_df <- bind_rows("GCTA with Geuvadis subset" = grm_gcta_df, 
+                             "Weir & Goudet with Geuvadis subset" = grm_wg_df, 
+                             .id = "method")
+
+grm_all_df <- read_rds("./grm_allinds_df.rds") %>% 
+  filter(pop1 %in% c("GBR", "CEU", "FIN", "TSI", "YRI") & 
+           pop2 %in% c("GBR", "CEU", "FIN", "TSI", "YRI")) %>%
+  mutate(method = recode(method, 
+                         "GCTA" = "GCTA with entire 1KGP",
+                         "Weir & Goudet" = "Weir & Goudet with entire 1KGP"))
+
+grm_df <- bind_rows(grm_geuvadis_df, grm_all_df)
 
 grm_df %>%
     filter(id1 == id2) %>%
     ggplot(aes(reorder_within(id1, value, method), value)) +
     geom_bar(aes(fill = pop1), stat = "identity", width = 1) +
-    facet_wrap(~method, scales = "free_x") +
-    scale_fill_colorblind() +
-    scale_color_colorblind() +
+    facet_wrap(~method, scales = "free_x", ncol = 2) +
+    scale_fill_nejm() +
     geom_hline(yintercept = 1L, linetype = 2, size = 1, color = "grey") +
     theme_bw() +
     theme(panel.grid = element_blank(),
@@ -305,108 +332,161 @@ grm_df %>%
 
 \* diagonal is set to NA so we can better see the range for off-diagonal (much smaller) values
 
-```{r, echo = FALSE}
-grm_offdiag <- grm_df %>%
+```{r, echo=FALSE}
+#GCTA
+grm_offdiag_gcta <- grm_df %>%
+  filter(grepl("^GCTA", method)) %>%
     mutate(value = ifelse(id1 == id2, NA, value)) %>%
-    arrange(pop1, pop2, id1, id2) %>%
+    arrange(method, pop1, pop2, id1, id2) %>%
     mutate(id1 = fct_inorder(id1),
            id2 = fct_inorder(id2))
 
-lines_v <- grm_offdiag %>%
+lines_v_gcta <- grm_offdiag_gcta %>%
     group_by(method, pop1) %>%
     filter(1:n() == last(1:n())) %>%
     ungroup() %>%
     select(method, id1, pop1)
 
-lines_h <- grm_offdiag %>%
+lines_h_gcta <- grm_offdiag_gcta %>%
     group_by(method, pop2) %>%
     filter(1:n() == last(1:n())) %>%
     ungroup() %>%
     select(method, id2, pop2)
 
-labels_v <- grm_offdiag %>%
+labels_v_gcta <- grm_offdiag_gcta %>%
     group_by(method, pop1) %>%
     filter(1:n() == floor(median(1:n()))) %>%
     ungroup() %>%
     select(method, id1, pop1)
 
-labels_h <- grm_offdiag %>%
+labels_h_gcta <- grm_offdiag_gcta %>%
     group_by(method, pop2) %>%
     filter(1:n() == floor(median(1:n()))) %>%
     ungroup() %>%
+    select(method, id2, pop2) %>%
+    filter(method == "GCTA with Geuvadis subset") %>%
+    select(id2, pop2)
+
+#Weir&Goudet
+grm_offdiag_wg <- grm_df %>%
+  filter(grepl("^Weir", method)) %>%
+    mutate(value = ifelse(id1 == id2, NA, value)) %>%
+    arrange(method, pop1, pop2, id1, id2) %>%
+    mutate(id1 = fct_inorder(id1),
+           id2 = fct_inorder(id2))
+
+lines_v_wg <- grm_offdiag_wg %>%
+    group_by(method, pop1) %>%
+    filter(1:n() == last(1:n())) %>%
+    ungroup() %>%
+    select(method, id1, pop1)
+
+lines_h_wg <- grm_offdiag_wg %>%
+    group_by(method, pop2) %>%
+    filter(1:n() == last(1:n())) %>%
+    ungroup() %>%
     select(method, id2, pop2)
 
-offdiag_gcta_p <- grm_offdiag %>%
-    filter(method == "GCTA") %>%
+labels_v_wg <- grm_offdiag_wg %>%
+    group_by(method, pop1) %>%
+    filter(1:n() == floor(median(1:n()))) %>%
+    ungroup() %>%
+    select(method, id1, pop1)
+
+labels_h_wg <- grm_offdiag_wg %>%
+    group_by(method, pop2) %>%
+    filter(1:n() == floor(median(1:n()))) %>%
+    ungroup() %>%
+    select(method, id2, pop2) %>%
+    filter(method == "Weir & Goudet with Geuvadis subset") %>%
+    select(id2, pop2)
+
+offdiag_gcta_p <- grm_offdiag_gcta %>%
     ggplot() +
     geom_tile(aes(id1, id2, fill = value)) +
     scale_fill_gradient2(name = "GRM values", 
-                         breaks = seq(round(min(grm_offdiag[grm_offdiag$method=="GCTA", ]$value, na.rm = TRUE), 2),
-                                      round(max(grm_offdiag[grm_offdiag$method=="GCTA", ]$value, na.rm = TRUE), 2),
+                         breaks = seq(round(min(grm_offdiag_gcta$value, na.rm = TRUE), 2),
+                                      round(max(grm_offdiag_gcta$value, na.rm = TRUE), 2),
                                       by = 0.02)) +
-    facet_wrap(~method) +
+    geom_hline(yintercept = lines_h_gcta$id2) +
+    geom_vline(xintercept = lines_v_gcta$id1) +
+    coord_cartesian(clip = "off") +
+    geom_text(data = labels_v_gcta, aes(x = id1, y = 0, label = pop1), 
+              vjust = 1.5) +
+    geom_text(data = labels_h_gcta, aes(y = id2, x = 0, label = pop2), 
+              vjust = -0.5, angle = 90) +
+    facet_wrap(~method, scales = "free") +
     theme_bw() +
     theme(panel.grid = element_blank(),
+          panel.spacing = unit(1, "lines"),
           axis.text = element_blank(),
           axis.line = element_blank(),
           axis.ticks = element_blank(),
           axis.title = element_blank(),
-          plot.margin = unit(c(1, 0, 1, 1), "lines")) +
-    geom_hline(yintercept = lines_h[lines_h$method == "GCTA",]$id2) +
-    geom_vline(xintercept = lines_v[lines_h$method == "GCTA",]$id1) +
-    coord_cartesian(clip = "off") +
-    geom_text(data = labels_v[labels_v$method == "GCTA",], aes(x = id1, y = 0, label = pop1), 
-              vjust = 1.5) +
-    geom_text(data = labels_h[labels_h$method == "GCTA",], aes(y = id2, x = 0, label = pop2), 
-              vjust = -0.5, angle = 90)
+          plot.margin = unit(c(1, 0, 1, 1), "lines"))
 
-offdiag_wg_p <- grm_offdiag %>%
-    filter(method == "Weir & Goudet") %>%
+offdiag_wg_p <- grm_offdiag_wg %>%
     ggplot() +
     geom_tile(aes(id1, id2, fill = value)) +
     scale_fill_gradient2(name = "GRM values", 
-                         breaks = seq(round(min(grm_offdiag[grm_offdiag$method=="Weir & Goudet", ]$value, na.rm = TRUE), 2),
-                                      round(max(grm_offdiag[grm_offdiag$method=="Weir & Goudet", ]$value, na.rm = TRUE), 2),
+                         breaks = seq(round(min(grm_offdiag_wg$value, na.rm = TRUE), 2),
+                                      round(max(grm_offdiag_wg$value, na.rm = TRUE), 2),
                                       by = 0.1)) +
-    facet_wrap(~method) +
+    geom_hline(yintercept = lines_h_wg$id2) +
+    geom_vline(xintercept = lines_v_wg$id1) +
+    coord_cartesian(clip = "off") +
+    geom_text(data = labels_v_wg, aes(x = id1, y = 0, label = pop1), 
+              vjust = 1.5) +
+    geom_text(data = labels_h_wg, aes(y = id2, x = 0, label = pop2), 
+              vjust = -0.5, angle = 90) +
+    facet_wrap(~method, scales = "free") +
     theme_bw() +
     theme(panel.grid = element_blank(),
+          panel.spacing = unit(1, "lines"),
           axis.text = element_blank(),
           axis.line = element_blank(),
           axis.ticks = element_blank(),
           axis.title = element_blank(),
-          plot.margin = unit(c(1, 0, 1, 1), "lines")) +
-    geom_hline(yintercept = lines_h[lines_h$method == "Weir & Goudet",]$id2) +
-    geom_vline(xintercept = lines_v[lines_h$method == "Weir & Goudet",]$id1) +
-    coord_cartesian(clip = "off") +
-    geom_text(data = labels_v[labels_v$method == "Weir & Goudet",], aes(x = id1, y = 0, label = pop1), 
-              vjust = 1.5) +
-    geom_text(data = labels_h[labels_h$method == "Weir & Goudet",], aes(y = id2, x = 0, label = pop2), 
-              vjust = -0.5, angle = 90)
+          plot.margin = unit(c(1, 0, 1, 1), "lines"))
 
-plot_grid(offdiag_gcta_p, offdiag_wg_p, ncol = 1)
+plot_grid(offdiag_gcta_p, offdiag_wg_p, nrow = 2)
 ```
 
 ### Rankings of pairs of individuals
 
-```{r}
+```{r, echo=FALSE}
 pair_ranks <- grm_df %>%
   group_by(method) %>%
   mutate(r = rank(value, ties.method = "first")) %>%
   select(-value) %>%
   pivot_wider(names_from = method, values_from = r) %>%
-  arrange(GCTA) %>%
+  arrange(`GCTA with Geuvadis subset`) %>%
   mutate(col = case_when(xor(pop1 == "YRI", pop2 == "YRI") ~ "AFR-EUR",
                          pop1 == "YRI" & pop2 == "YRI" ~ "AFR-AFR",
                          pop1 != "YRI" & pop2 != "YRI" ~ "EUR-EUR"))
 
-ggplot(pair_ranks, aes(GCTA, `Weir & Goudet`)) +
+rank_p1 <- 
+  ggplot(pair_ranks, aes(`GCTA with entire 1KGP`, `Weir & Goudet with entire 1KGP`)) +
   geom_point(aes(color = col), alpha = .1) +
-  scale_color_manual(values = c("#046C9A", "#D69C4E", "#000000")) +
+  scale_color_manual(values = c("cornflowerblue", "#D69C4E", "#000000")) +
   theme_bw() +
   theme(panel.grid = element_blank()) +
   guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
-  labs(color = "Population\npair")
+  labs(x = "GCTA", y = "Weir & Goudet",
+       color = "Population\npair", title = "Entire 1KGP")
+
+rank_p2 <- 
+  ggplot(pair_ranks, 
+         aes(`GCTA with Geuvadis subset`, `Weir & Goudet with Geuvadis subset`)) +
+  geom_point(aes(color = col), alpha = .1) +
+  scale_color_manual(values = c("cornflowerblue", "#D69C4E", "#000000")) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
+  labs(x = "GCTA", y = "Weir & Goudet", 
+       color = "Population\npair", title = "Geuvadis subset")
+
+plot_grid(rank_p1, NULL, rank_p2, ncol = 1, rel_heights = c(1, .1, 1))
 ```
 
 
@@ -438,7 +518,7 @@ The first step is to create a `SeqVarData` object including both the GDS (genoty
 
 Then we will use the `assocTestSingle` function to assess the effect of each variant.
 
-```{r, assocTest}
+```{r, assocTest, eval=FALSE}
 # order individuals according to GDS
 pData(annotphen) <- pData(annotphen) %>%
     mutate(sampleid = factor(sampleid, levels = seqGetData(pruned, "sample.id"))) %>%
@@ -459,12 +539,12 @@ head(assoc, 10)
 
 `GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
 
-```{r}
+```{r eval=FALSE}
 varCompCI(mod_null_wg, prop = TRUE)
 ```
 
 
-## Package versions
+## Session Information 
 
 ```{r echo=FALSE}
 devtools::session_info()

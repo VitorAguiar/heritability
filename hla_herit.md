@@ -2,35 +2,48 @@ Heritability
 ================
 
 ``` r
+# data processing
 library(tidyverse)
 library(tidytext)
+
+# genetic data
 library(SeqArray) 
 library(SeqVarTools) 
 library(SNPRelate)
 library(GENESIS)
 library(Biobase)
+
+# plotting
 library(cowplot)
 library(ggbeeswarm)
-library(ggthemes)
+library(ggsci)
+library(GGally)
 ```
 
 ## Sample:
 
--   445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
+  - 445 individuals from The 1000 Genomes Project (358 from 4 European
+    populations + 87 Yorubans) with RNA-seq available from the Geuvadis
+    consortium.
 
 ## Data pre-processing
 
 ### Genotypes
 
-We use VCF files provided by 1000 Genomes Phase III (low coverage, in GRCh38 coordinates).
+We use VCF files provided by 1000 Genomes Phase III (low coverage, in
+GRCh38 coordinates).
 
-We select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
+We select the GEUVADIS individuals, and exclude variants with missing
+data or which are monomorphic in this subset of individuals.
 
-Then we convert VCF to GDS, which is a data structure that optimizes working with genotype data in R.
+Then we convert VCF to GDS, which is a data structure that optimizes
+working with genotype data in R.
 
-To perform all this processing, we run the script `./launch_processVCF.sh`.
+To perform all this processing, we run the script
+`./launch_processVCF.sh`.
 
-Then we concatenate the GDS files for each chromosome in a single GDS with the code below:
+Then we concatenate the GDS files for each chromosome in a single GDS
+with the code below:
 
 ``` r
 gds_list <- sprintf("/raid/genevol/heritability/data/kgp/chr%d.gds", 1:22)
@@ -54,15 +67,18 @@ pruned <- snpgdsLDpruning(gds,
 prunedsnps <- unlist(pruned, use.names = FALSE)
 
 seqSetFilter(gds, variant.id = prunedsnps)
-seqExport(gds, "/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+seqExport(gds, "/raid/genevol/heritability/data/kgp/all_inds/allchrs_pruned.gds")
 seqClose(gds)
 ```
 
 ### Phenotypes
 
-We use the FASTQ files provided by the Geuvadis Consortium, and estimate expression with Salmon. We begin with the expression of HLA-A.
+We use the FASTQ files provided by the Geuvadis Consortium, and estimate
+expression with Salmon. We begin with the expression of HLA-A.
 
-Transcript Per Million (TPM) values are quantile normal transformed by `QTLtools correct`. Here is a comparison between raw and standardize TPMs:
+Transcript Per Million (TPM) values are quantile normal transformed by
+`QTLtools correct`. Here is a comparison between raw and standardize
+TPMs:
 
 ``` r
 # raw
@@ -82,7 +98,7 @@ hla_expression_std <-
     select(sampleid, value)
 ```
 
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-3-1.png)
+![](hla_herit_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
 
 ## Results
 
@@ -107,12 +123,10 @@ pca <- snpgdsPCA(gds, num.thread = 16L)
         using 16 threads
         # of principal components: 32
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 31 10:28:56 2021    (internal increment: 8752)
-
-    [..................................................]  0%, ETC: ---        
-    [==================================================] 100%, completed, 36s
-    Wed Mar 31 10:29:32 2021    Begin (eigenvalues and eigenvectors)
-    Wed Mar 31 10:29:32 2021    Done.
+    Fri Apr  2 14:43:50 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 1.0m
+    Fri Apr  2 14:44:51 2021    Begin (eigenvalues and eigenvectors)
+    Fri Apr  2 14:44:51 2021    Done.
 
 ``` r
 pops <- read_tsv("/raid/genevol/heritability/data/geuvadis_metadata.tsv") %>%
@@ -124,7 +138,7 @@ pcadf <- as.data.frame(pca$eigenvect) %>%
     inner_join(pops, ., by = "sampleid")
 ```
 
-![](hla_herit_files/figure-markdown_github/pcaplot-1.png)
+![](hla_herit_files/figure-gfm/pcaplot-1.png)<!-- -->
 
 ### HLA-A expression across populations
 
@@ -135,44 +149,29 @@ sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
 
 expression_df <- left_join(hla_expression_std, sample_info, by = "sampleid") %>%
     select(sampleid, population, sex, lab, value)
-
-ggplot(expression_df, aes(reorder(population, value), value)) +
-    geom_quasirandom(aes(color = population), method = "smiley") +
-    geom_boxplot(fill = NA, outlier.color = NA) +
-    scale_color_colorblind() +
-    theme_bw() +
-    labs(x = NULL, y = "Std TPM")
 ```
 
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-5-1.png)
+![](hla_herit_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
 
 ### HLA-A expression across laboratories
 
-``` r
-ggplot(expression_df, aes(reorder(lab, value), value)) +
-    geom_quasirandom(aes(color = lab), method = "smiley") +
-    geom_boxplot(fill = NA, outlier.color = NA) +
-    theme_bw() +
-    labs(x = NULL, y = "Std TPM")
-```
-
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-6-1.png)
+![](hla_herit_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
 ### HLA-A expression between males and females
 
-``` r
-ggplot(expression_df, aes(reorder(sex, value), value)) +
-    geom_quasirandom(aes(color = sex), method = "smiley") +
-    geom_boxplot(fill = NA, outlier.color = NA) +
-    theme_bw() +
-    labs(x = NULL, y = "Std TPM")
-```
+![](hla_herit_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
 
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-7-1.png)
+Here we got to evaluate whether such differences across groupings are
+adequate for an analysis with the combined dataset, or whether they can
+be accounted for by using covariates.
 
-Here we got to evaluate whether such differences across groupings are adequate for an analysis with the combined dataset, or whether they can be accounted for by using covariates.
-
-Before we continue, we need to transform our phenotype data.frame into an "Annotated data frame", which is a data structure provided by `Biobase`. This means that we have to add metadata to our `expression_df` data.frame, and include a `sample.id` column as a requirement for `GENESIS`. Since we do not have multiple samples for the same individuals, we will just create the `sample.id` column as a copy of `sampleid`.
+Before we continue, we need to transform our phenotype data.frame into
+an “Annotated data frame”, which is a data structure provided by
+`Biobase`. This means that we have to add metadata to our
+`expression_df` data.frame, and include a `sample.id` column as a
+requirement for `GENESIS`. Since we do not have multiple samples for the
+same individuals, we will just create the `sample.id` column as a copy
+of `sampleid`.
 
 ``` r
 metadata <- 
@@ -198,48 +197,54 @@ annotphen <- expression_df %>%
 varMetadata(annotphen)
 ```
 
-                           labelDescription
-    sample.id             sample identifier
-    sampleid             subject identifier
-    lab        laboratory of RNA sequencing
-    sex                       subject's sex
-    population         subject's population
-    V1                                 PC 1
-    V2                                 PC 2
-    V3                                 PC 3
-    value          expression levels in TPM
+``` 
+                       labelDescription
+sample.id             sample identifier
+sampleid             subject identifier
+lab        laboratory of RNA sequencing
+sex                       subject's sex
+population         subject's population
+V1                                 PC 1
+V2                                 PC 2
+V3                                 PC 3
+value          expression levels in TPM
+```
 
 ``` r
 # access the data with the pData() function
 head(pData(annotphen))
 ```
 
-      sample.id sampleid      lab    sex population          V1            V2           V3      value
-    1   HG00096  HG00096    UNIGE   male        GBR -0.02409590  1.178854e-03 -0.005208341  0.0620013
-    2   HG00097  HG00097     LUMC female        GBR -0.02433438 -9.808199e-04 -0.007818318 -0.4860010
-    3   HG00099  HG00099     HMGU female        GBR -0.02452840 -2.650025e-05 -0.007551133 -1.9096400
-    4   HG00100  HG00100 CNAG_CRG female        GBR -0.02342908  1.718510e-02  0.007413764 -0.4235280
-    5   HG00101  HG00101    UNIGE   male        GBR -0.02409977  1.364934e-03 -0.003502374 -1.4375500
-    6   HG00102  HG00102    MPIMG female        GBR -0.02474157 -2.891527e-03 -0.006582548 -1.3484100
+``` 
+  sample.id sampleid      lab    sex population          V1            V2           V3      value
+1   HG00096  HG00096    UNIGE   male        GBR -0.02409590  1.178854e-03 -0.005208341  0.0620013
+2   HG00097  HG00097     LUMC female        GBR -0.02433438 -9.808199e-04 -0.007818318 -0.4860010
+3   HG00099  HG00099     HMGU female        GBR -0.02452840 -2.650025e-05 -0.007551133 -1.9096400
+4   HG00100  HG00100 CNAG_CRG female        GBR -0.02342908  1.718510e-02  0.007413764 -0.4235280
+5   HG00101  HG00101    UNIGE   male        GBR -0.02409977  1.364934e-03 -0.003502374 -1.4375500
+6   HG00102  HG00102    MPIMG female        GBR -0.02474157 -2.891527e-03 -0.006582548 -1.3484100
+```
 
 ## GRM
 
-### GCTA vs Weir&Gouget
+### GCTA vs. Weir & Goudet
 
-We will use the `SNPRelate` package to compute a GRM. We will begin with the GCTA method.
+We will use the `SNPRelate` package to compute the GRMs.
 
 ``` r
 # Close GDS and open the pruned one
 gdsfmt::showfile.gds(closeall = TRUE)
 ```
 
-                                                    FileName ReadOnly  State
-    1 /raid/genevol/heritability/data/kgp/allchrs_pruned.gds     TRUE closed
+``` 
+                                                FileName ReadOnly  State
+1 /raid/genevol/heritability/data/kgp/allchrs_pruned.gds     TRUE closed
+```
 
 ``` r
 pruned <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
 
-# Computar a GRM
+# Compute GCTA GRM
 grm_gcta_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
 ```
 
@@ -250,13 +255,12 @@ grm_gcta_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 31 10:29:38 2021    (internal increment: 8752)
-
-    [..................................................]  0%, ETC: ---        
-    [==================================================] 100%, completed, 39s
-    Wed Mar 31 10:30:17 2021    Done.
+    Fri Apr  2 14:45:00 2021    (internal increment: 8752)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 1.3m
+    Fri Apr  2 14:46:17 2021    Done.
 
 ``` r
+# Compute Weir&Goudet GRM
 grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
 ```
 
@@ -267,15 +271,13 @@ grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
         # of SNVs: 2,195,733
         using 16 threads
     CPU capabilities: Double-Precision SSE2
-    Wed Mar 31 10:30:20 2021    (internal increment: 65536)
-
-    [..................................................]  0%, ETC: ---        
-    [==================================================] 100%, completed, 9s
-    Wed Mar 31 10:30:29 2021    Done.
-
-We extract and rename the matrix
+    Fri Apr  2 14:46:19 2021    (internal increment: 65536)
+    [..................................................]  0%, ETC: ---        [==================================================] 100%, completed, 12s
+    Fri Apr  2 14:46:31 2021    Done.
 
 ``` r
+#Extract and rename the matrix
+
 grm_gcta <- grm_gcta_obj$grm
 rownames(grm_gcta) <- sample_ids
 colnames(grm_gcta) <- sample_ids
@@ -287,43 +289,27 @@ colnames(grm_wg) <- sample_ids
 
 ### Distribution of the GRM diagonal values
 
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-11-1.png)
+![](hla_herit_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
 
 ### GRM off-diagonal values
 
-\* diagonal is set to NA so we can better see the range for off-diagonal (much smaller) values
+\* diagonal is set to NA so we can better see the range for off-diagonal
+(much smaller) values
 
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-12-1.png)
+![](hla_herit_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
 
 ### Rankings of pairs of individuals
 
-``` r
-pair_ranks <- grm_df %>%
-  group_by(method) %>%
-  mutate(r = rank(value, ties.method = "first")) %>%
-  select(-value) %>%
-  pivot_wider(names_from = method, values_from = r) %>%
-  arrange(GCTA) %>%
-  mutate(col = case_when(xor(pop1 == "YRI", pop2 == "YRI") ~ "AFR-EUR",
-                         pop1 == "YRI" & pop2 == "YRI" ~ "AFR-AFR",
-                         pop1 != "YRI" & pop2 != "YRI" ~ "EUR-EUR"))
-
-ggplot(pair_ranks, aes(GCTA, `Weir & Goudet`)) +
-  geom_point(aes(color = col), alpha = .1) +
-  scale_color_manual(values = c("#046C9A", "#D69C4E", "#000000")) +
-  theme_bw() +
-  theme(panel.grid = element_blank()) +
-  guides(color = guide_legend(override.aes = list(alpha = 1, size = 2))) +
-  labs(color = "Population\npair")
-```
-
-![](hla_herit_files/figure-markdown_github/unnamed-chunk-13-1.png)
+![](hla_herit_files/figure-gfm/unnamed-chunk-13-1.png)<!-- -->
 
 ### Fitting the Null model
 
-The first step in finding genetic variants which are associated with a phenotype is preparing null model.
+The first step in finding genetic variants which are associated with a
+phenotype is preparing null model.
 
-We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
+We fit a null model which adjusts gene expression according to
+covariates such as population of origin, laboratory of sequencing, and
+sex. We also account for the relatedness between individuals (GRM).
 
 ``` r
 #mod_null_gcta <- fitNullModel(annotphen, 
@@ -350,11 +336,15 @@ mod_null_wg <- fitNullModel(annotphen,
 
 ### Association testing
 
-Now that we have a Null model adjusting expression levels for sex, laboratory, population genetic structure, and relatedness, we can test for the association of the genetic variants with expression levels.
+Now that we have a Null model adjusting expression levels for sex,
+laboratory, population genetic structure, and relatedness, we can test
+for the association of the genetic variants with expression levels.
 
-The first step is to create a `SeqVarData` object including both the GDS (genotypes) and the Annotated data.frame (phenotypes).
+The first step is to create a `SeqVarData` object including both the GDS
+(genotypes) and the Annotated data.frame (phenotypes).
 
-Then we will use the `assocTestSingle` function to assess the effect of each variant.
+Then we will use the `assocTestSingle` function to assess the effect of
+each variant.
 
 ``` r
 # order individuals according to GDS
@@ -368,11 +358,7 @@ iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
 
 # test
 assoc <- assocTestSingle(iterator, mod_null_wg)
-```
 
-    # of selected samples: 445
-
-``` r
 head(assoc, 10)
 ```
 
@@ -388,9 +374,11 @@ head(assoc, 10)
     9          20   1 14604            1   445 0.150561798 134  -9.005681631 11.025875 -0.816777082 0.41405583 -0.074078213 0.09069575 1.526592e-03
     10         24   1 14933            1   445 0.041573034  37   4.511022584  6.639190  0.679453753 0.49685040  0.102339856 0.15062078 1.056418e-03
 
+
 ### Heritability
 
-`GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI:
+`GENESIS` includes the `varCompCI` to compute the proportion of variance
+explained (heritability) by each random effect, with a 95% CI:
 
 ``` r
 varCompCI(mod_null_wg, prop = TRUE)
@@ -400,7 +388,7 @@ varCompCI(mod_null_wg, prop = TRUE)
     V_A                  1        1        1
     V_resid.var          0       NA       NA
 
-## Package versions
+## Session Information
 
     Error in get(genname, envir = envir) : object 'testthat_print' not found
 
@@ -410,12 +398,12 @@ varCompCI(mod_null_wg, prop = TRUE)
      os       Ubuntu 16.04.7 LTS          
      system   x86_64, linux-gnu           
      ui       X11                         
-     language en_US:en                    
+     language (EN)                        
      collate  en_US.UTF-8                 
      ctype    en_US.UTF-8                 
      tz       America/Sao_Paulo           
-     date     2021-03-31                  
-
+     date     2021-04-02                  
+    
     ─ Packages ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
      package          * version  date       lib source        
      assertthat         0.2.1    2019-03-21 [2] CRAN (R 4.0.2)
@@ -458,9 +446,10 @@ varCompCI(mod_null_wg, prop = TRUE)
      GenomeInfoDb       1.26.2   2020-12-08 [1] Bioconductor  
      GenomeInfoDbData   1.2.4    2021-02-20 [1] Bioconductor  
      GenomicRanges      1.42.0   2020-10-27 [1] Bioconductor  
+     GGally           * 2.1.0    2021-01-06 [1] CRAN (R 4.0.2)
      ggbeeswarm       * 0.6.0    2017-08-07 [1] CRAN (R 4.0.2)
      ggplot2          * 3.3.2    2020-06-19 [2] CRAN (R 4.0.2)
-     ggthemes         * 4.2.4    2021-01-20 [1] CRAN (R 4.0.2)
+     ggsci            * 2.9      2018-05-14 [1] CRAN (R 4.0.2)
      glue               1.4.2    2020-08-27 [1] CRAN (R 4.0.2)
      gtable             0.3.0    2019-03-25 [2] CRAN (R 4.0.2)
      GWASExactHW        1.01     2013-01-05 [1] CRAN (R 4.0.2)
@@ -496,6 +485,7 @@ varCompCI(mod_null_wg, prop = TRUE)
      pkgbuild           1.1.0    2020-07-13 [2] CRAN (R 4.0.2)
      pkgconfig          2.0.3    2019-09-22 [2] CRAN (R 4.0.2)
      pkgload            1.1.0    2020-05-29 [1] CRAN (R 4.0.2)
+     plyr               1.8.6    2020-03-03 [2] CRAN (R 4.0.2)
      prettyunits        1.1.1    2020-01-24 [2] CRAN (R 4.0.2)
      processx           3.4.5    2020-11-30 [1] CRAN (R 4.0.2)
      ps                 1.5.0    2020-12-05 [1] CRAN (R 4.0.2)
@@ -503,12 +493,14 @@ varCompCI(mod_null_wg, prop = TRUE)
      quantreg           5.61     2020-07-09 [2] CRAN (R 4.0.2)
      quantsmooth        1.56.0   2020-10-27 [1] Bioconductor  
      R6                 2.5.0    2020-10-28 [1] CRAN (R 4.0.2)
+     RColorBrewer       1.1-2    2014-12-07 [2] CRAN (R 4.0.2)
      Rcpp               1.0.6    2021-01-15 [1] CRAN (R 4.0.2)
      RCurl              1.98-1.2 2020-04-18 [2] CRAN (R 4.0.2)
      readr            * 1.4.0    2020-10-05 [1] CRAN (R 4.0.2)
      readxl             1.3.1    2019-03-13 [1] CRAN (R 4.0.2)
      remotes            2.2.0    2020-07-21 [2] CRAN (R 4.0.2)
      reprex             1.0.0    2021-01-27 [1] CRAN (R 4.0.2)
+     reshape            0.8.8    2018-10-23 [1] CRAN (R 4.0.2)
      rlang              0.4.10   2020-12-30 [1] CRAN (R 4.0.2)
      rmarkdown          2.7      2021-02-19 [1] CRAN (R 4.0.2)
      rprojroot          1.3-2    2018-01-03 [2] CRAN (R 4.0.2)
@@ -544,7 +536,7 @@ varCompCI(mod_null_wg, prop = TRUE)
      yaml               2.2.1    2020-02-01 [2] CRAN (R 4.0.2)
      zlibbioc           1.36.0   2020-10-27 [1] Bioconductor  
      zoo                1.8-8    2020-05-02 [2] CRAN (R 4.0.2)
-
+    
     [1] /raid/genevol/users/vitor/R/x86_64-pc-linux-gnu-library/4.0
     [2] /usr/local/lib/R/site-library
     [3] /usr/lib/R/site-library
