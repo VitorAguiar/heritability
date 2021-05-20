@@ -301,7 +301,7 @@ rownames(grm_wg_geuv) <- grm_wg_geuv_obj$sample.id
 colnames(grm_wg_geuv) <- grm_wg_geuv_obj$sample.id
 ```
 
-```{r save_data, eval=FALSE}
+```{r save_data, eval=FALSE, echo=FALSE}
 write_rds(grm_gcta, "grm_gcta.rds")
 write_rds(grm_wg, "grm_wg.rds")
 write_rds(grm_gcta_geuv, "grm_gcta_geuv.rds")
@@ -576,7 +576,7 @@ The first step is to create a `SeqVarData` object including both the GDS (genoty
 
 Then we will use the `assocTestSingle` function to assess the effect of each variant.
 
-```{r, assocTest}
+```{r, assocTest, eval=FALSE}
 # order individuals according to GDS
 gdsfmt::showfile.gds(closeall = TRUE)
 
@@ -598,18 +598,22 @@ assoc <- assocTestSingle(iterator, mod_null_gcta)
 head(assoc, 10)
 ```
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, eval=FALSE}
 write_rds(assoc, "assocTest.rds")
 ```
 
+```{r, echo=FALSE}
+assoc <- read_rds("./assocTest.rds")
+head(assoc, 10)
+```
 
 
 ### Heritability
 
-`GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
+`GENESIS` includes the `varCompCI` to compute point estimates and confidence intervals for each of the random effects variance component estimates. 
 
-```{r eval=FALSE}
-varCompCI(mod_null_wg, prop = TRUE)
+```{r}
+varCompCI(mod_null_gcta, prop = TRUE)
 ```
 
 
