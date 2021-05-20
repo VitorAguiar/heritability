@@ -1,0 +1,620 @@
+---
+title: "Heritability"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, 
+                      message = FALSE, comment = '',
+                      engine.opts = list(bash = "-l"))
+options(width = 999)
+```
+
+```{r pkgs}
+# data processing
+library(tidyverse)
+library(tidytext)
+
+# genetic data
+library(SeqArray) 
+library(SeqVarTools) 
+library(SNPRelate)
+library(GENESIS)
+library(Biobase)
+
+# plotting
+library(cowplot)
+library(ggbeeswarm)
+library(ggsci)
+library(GGally)
+```
+
+## Sample:
+
+- 445 individuals from The 1000 Genomes Project (358 from 4 European populations + 87 Yorubans) with RNA-seq available from the Geuvadis consortium.
+
+## Data pre-processing
+
+### Genotypes
+
+We use VCF files provided by 1000 Genomes Phase III (low coverage, in GRCh38 coordinates).
+
+We select the GEUVADIS individuals, and exclude variants with missing data or which are monomorphic in this subset of individuals.
+
+Then we convert VCF to GDS, which is a data structure that optimizes working with genotype data in R.
+
+To perform all this processing, we run the script `./launch_processVCF.sh`.
+
+Then we concatenate the GDS files for each chromosome in a single GDS with the code below:
+
+```{r VcfToGds, eval=FALSE}
+gds_list <- sprintf("/raid/genevol/heritability/data/kgp/chr%d.gds", 1:22)
+
+gds_file <- "/raid/genevol/heritability/data/kgp/allchrs.gds"
+
+seqMerge(gds_list, gds_file)
+```
+
+We reduce the amount of variants by LD pruning:
+
+```{r, eval=FALSE}
+# this step takes hours
+gds <- seqOpen(gds_file)
+
+set.seed(100)
+pruned <- snpgdsLDpruning(gds, 
+                          method = "corr", 
+                          ld.threshold = sqrt(0.1))
+
+prunedsnps <- unlist(pruned, use.names = FALSE)
+
+seqSetFilter(gds, variant.id = prunedsnps)
+seqExport(gds, "/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+seqClose(gds)
+```
+
+
+### Phenotypes
+
+We use the FASTQ files provided by the Geuvadis Consortium, and estimate expression with Salmon. We begin with the expression of HLA-A.
+
+Transcript Per Million (TPM) values are quantile normal transformed by `QTLtools correct`. Here is a comparison between raw and standardize TPMs:
+
+```{r}
+# raw
+hla_expression <- 
+    "/raid/genevol/heritability/data/geuvadis_expression.bed.gz" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
+
+# standardized by QTLtools
+hla_expression_std <- 
+    "/raid/genevol/heritability/data/geuvadis_expression_std.bed" %>%
+    read_tsv() %>%
+    filter(id == "HLA-A") %>%
+    pivot_longer(-(1:6), names_to = "sampleid") %>%
+    select(sampleid, value)
+```
+
+```{r, echo = FALSE}
+h1 <- ggplot(hla_expression, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "raw")
+
+h2 <- ggplot(hla_expression_std, aes(value)) +
+    geom_histogram() +
+    labs(x = NULL, title = "standardized")
+
+s1 <- left_join(hla_expression, hla_expression_std, 
+          by = "sampleid", suffix = c("_raw", "_std")) %>%
+    ggplot(aes(value_raw, value_std)) +
+    geom_point() +
+    labs(x = "Raw", y = "Standardized")
+
+plot_grid(h1, h2, s1, nrow = 2)
+```
+
+## Results
+
+### PCA on genotype data
+```{r}
+pops <- read_tsv("/raid/genevol/heritability/data/geuvadis_metadata.tsv") %>%
+    distinct(sampleid, population)
+
+# Close GDS and open the pruned one
+gdsfmt::showfile.gds(closeall = TRUE)
+
+gds <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+
+sample_ids <- seqGetData(gds, "sample.id")
+
+pca <- snpgdsPCA(gds, sample.id = pops$sampleid, num.thread = 16L)
+
+pcadf <- as.data.frame(pca$eigenvect) %>%
+    as_tibble() %>%
+    add_column(sampleid = pca$sample.id, .before = 1) %>%
+    inner_join(pops, ., by = "sampleid")
+```
+
+```{r pcaplot, echo=FALSE}
+p1 <- ggplot(pcadf, aes(V1, V2, color = population)) +
+    geom_point(alpha = .5) +
+    scale_color_nejm() +
+    theme(panel.grid.minor = element_blank()) +
+    guides(color = guide_legend(title.position = "top",
+                                direction = "horizontal", 
+                                nrow = 2,
+                                override.aes = list(alpha = 1, size = 2.5)))
+
+p1_leg <- get_legend(p1)
+
+p1 <- p1 + theme(legend.position = "none")
+
+p2 <- ggplot(pcadf, aes(V2, V3, color = population)) +
+    geom_point(alpha = .5) +
+    scale_color_nejm() +
+    theme(panel.grid.minor = element_blank(),
+          legend.position = "none")
+
+p3 <- ggplot(pcadf, aes(V3, V4, color = population)) +
+    geom_point(alpha = .5) +
+    scale_color_nejm() +
+    theme(panel.grid.minor = element_blank(),
+          legend.position = "none")
+
+pgrid1 <- plot_grid(p1, p1_leg, p2, p3, nrow = 2)
+
+pgrid2 <- 
+  ggparcoord(pcadf, columns = 3:10,
+             groupColumn = "population", scale = "uniminmax", alpha = .5) +
+  scale_color_nejm() +
+  theme(panel.grid = element_blank(),
+        legend.position = "none") +
+  labs(x = NULL, y = "")
+
+
+plot_grid(pgrid1, NULL, pgrid2, ncol = 1, rel_heights = c(1, .1, .6))
+```
+
+
+### HLA-A expression across populations
+
+```{r}
+sample_info <- "/raid/genevol/heritability/data/geuvadis_metadata.tsv" %>%
+    read_tsv() %>%
+    select(-ena_id)
+
+expression_df <- left_join(hla_expression_std, sample_info, by = "sampleid") %>%
+    select(sampleid, population, sex, lab, value)
+```
+
+```{r, echo=FALSE}
+ggplot(expression_df, aes(reorder(population, value), value)) +
+    geom_quasirandom(aes(color = population), method = "smiley") +
+    geom_boxplot(fill = NA, outlier.color = NA) +
+    scale_color_nejm() +
+    theme_bw() +
+    labs(x = NULL, y = "Std TPM")
+```
+
+### HLA-A expression across laboratories
+
+```{r, echo = FALSE}
+ggplot(expression_df, aes(reorder(lab, value), value)) +
+    geom_quasirandom(aes(color = lab), method = "smiley") +
+    geom_boxplot(fill = NA, outlier.color = NA) +
+    theme_bw() +
+    labs(x = NULL, y = "Std TPM")
+```
+
+### HLA-A expression between males and females
+
+```{r, echo=FALSE}
+ggplot(expression_df, aes(reorder(sex, value), value)) +
+    geom_quasirandom(aes(color = sex), method = "smiley") +
+    geom_boxplot(fill = NA, outlier.color = NA) +
+    theme_bw() +
+    labs(x = NULL, y = "Std TPM")
+```
+
+Here we got to evaluate whether such differences across groupings are adequate for an analysis with the combined dataset, or whether they can be accounted for by using covariates.
+
+Before we continue, we need to transform our phenotype data.frame into an "Annotated data frame", which is a data structure provided by `Biobase`. This means that we have to add metadata to our `expression_df` data.frame, and include a `sample.id` column as a requirement for `GENESIS`. Since we do not have multiple samples for the same individuals, we will just create the `sample.id` column as a copy of `sampleid`.
+
+
+```{r}
+metadata <- 
+    c("sample identifier",
+      "subject identifier",
+      "laboratory of RNA sequencing",
+      "subject's sex",
+      "subject's population",
+      "PC 1",
+      "PC 2",
+      "PC 3",
+      "expression levels in TPM") %>%
+    data.frame(labelDescription = .) 
+
+annotphen <- expression_df %>%
+    mutate(sample.id = sampleid) %>%
+    left_join(select(pcadf, sampleid, V1:V3), by = "sampleid") %>%
+    select(sample.id, sampleid, lab, sex, population, V1, V2, V3, value) %>%
+    as.data.frame() %>%
+    AnnotatedDataFrame(metadata)
+
+# access the metadata with the varMetadata() function
+varMetadata(annotphen)
+
+# access the data with the pData() function
+head(pData(annotphen))
+```
+
+
+## GRM
+
+### GCTA vs. Weir & Goudet
+
+We will use the `SNPRelate` package to compute the GRMs.
+
+In order to compare GRMs on different subsets of data, we will use the same VCF which was processed to include all variable sites when taking into account all 1KGP individuals (script `./submit_processVCF_1KGP_all.pbs`).
+
+
+```{r GRM, eval=FALSE}
+# Close GDS and open the pruned one
+gdsfmt::showfile.gds(closeall = TRUE)
+
+pruned <- seqOpen("/raid/genevol/heritability/data/kgp/all_inds/allchrs_pruned.gds")
+
+# Compute GCTA GRM with all individuals
+grm_gcta_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L)
+
+# Compute Weir&Goudet GRM with all individuals
+grm_wg_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L)
+
+
+# Compute GCTA GRM with Geuvadis subset
+grm_gcta_geuv_obj <- snpgdsGRM(pruned, method = "GCTA", num.thread = 16L,
+                               sample.id = pops$sampleid)
+
+# Compute Weir&Goudet GRM with Geuvadis subset
+grm_wg_geuv_obj <- snpgdsGRM(pruned, method = "IndivBeta", num.thread = 16L,
+                             sample.id = pops$sampleid)
+
+
+#Extract and rename the matrices
+grm_gcta <- grm_gcta_obj$grm
+rownames(grm_gcta) <- grm_gcta_obj$sample.id
+colnames(grm_gcta) <- grm_gcta_obj$sample.id
+
+grm_wg <- grm_wg_obj$grm
+rownames(grm_wg) <- grm_wg_obj$sample.id
+colnames(grm_wg) <- grm_wg_obj$sample.id
+
+grm_gcta_geuv <- grm_gcta_geuv_obj$grm
+rownames(grm_gcta_geuv) <- grm_gcta_geuv_obj$sample.id
+colnames(grm_gcta_geuv) <- grm_gcta_geuv_obj$sample.id
+
+grm_wg_geuv <- grm_wg_geuv_obj$grm
+rownames(grm_wg_geuv) <- grm_wg_geuv_obj$sample.id
+colnames(grm_wg_geuv) <- grm_wg_geuv_obj$sample.id
+```
+
+```{r save_data, eval=FALSE}
+write_rds(grm_gcta, "grm_gcta.rds")
+write_rds(grm_wg, "grm_wg.rds")
+write_rds(grm_gcta_geuv, "grm_gcta_geuv.rds")
+write_rds(grm_wg_geuv, "grm_wg_geuv.rds")
+```
+
+
+
+### Distribution of the GRM diagonal values
+```{r, echo = FALSE, eval=FALSE}
+grm_gcta_df <- grm_gcta %>%
+    as.data.frame() %>%
+    rownames_to_column("id1") %>%
+    pivot_longer(-id1, names_to = "id2") %>%
+    left_join(pops, by = c("id1" = "sampleid")) %>%
+    left_join(pops, by = c("id2" = "sampleid")) %>%
+    select(id1, id2, pop1 = population.x, pop2 = population.y, value)
+
+grm_wg_df <- grm_wg %>%
+    as.data.frame() %>%
+    rownames_to_column("id1") %>%
+    pivot_longer(-id1, names_to = "id2") %>%
+    left_join(pops, by = c("id1" = "sampleid")) %>%
+    left_join(pops, by = c("id2" = "sampleid")) %>%
+    select(id1, id2, pop1 = population.x, pop2 = population.y, value)
+
+grm_gcta_geuv_df <- grm_gcta_geuv %>%
+    as.data.frame() %>%
+    rownames_to_column("id1") %>%
+    pivot_longer(-id1, names_to = "id2") %>%
+    left_join(pops, by = c("id1" = "sampleid")) %>%
+    left_join(pops, by = c("id2" = "sampleid")) %>%
+    select(id1, id2, pop1 = population.x, pop2 = population.y, value)
+
+grm_wg_geuv_df <- grm_wg_geuv %>%
+    as.data.frame() %>%
+    rownames_to_column("id1") %>%
+    pivot_longer(-id1, names_to = "id2") %>%
+    left_join(pops, by = c("id1" = "sampleid")) %>%
+    left_join(pops, by = c("id2" = "sampleid")) %>%
+    select(id1, id2, pop1 = population.x, pop2 = population.y, value)
+
+grm_df <- bind_rows("GCTA with entire 1KGP" = grm_gcta_df,
+                    "Weir & Goudet with entire 1KGP" = grm_wg_df,
+                    "GCTA with Geuvadis subset" = grm_gcta_geuv_df, 
+                    "Weir & Goudet with Geuvadis subset" = grm_wg_geuv_df, 
+                    .id = "method") %>%
+  filter(pop1 %in% c("GBR", "CEU", "FIN", "TSI", "YRI") & 
+           pop2 %in% c("GBR", "CEU", "FIN", "TSI", "YRI"))
+
+write_rds(grm_df, "./grm_df.rds")
+```
+
+```{r load_precomputed_data, echo=FALSE}
+grm_gcta <- read_rds("grm_gcta.rds")
+grm_wg <- read_rds("grm_wg.rds")
+grm_gcta_geuv <- read_rds("grm_gcta_geuv.rds")
+grm_wg_geuv <- read_rds("grm_wg_geuv.rds")
+
+grm_df <- read_rds("./grm_df.rds")
+```
+
+
+```{r, echo=FALSE}
+grm_df %>%
+    filter(id1 == id2) %>%
+    ggplot(aes(reorder_within(id1, value, method), value)) +
+    geom_bar(aes(fill = pop1), stat = "identity", width = 1) +
+    facet_wrap(~method, scales = "free_x", ncol = 2) +
+    scale_fill_nejm() +
+    geom_hline(yintercept = 1L, linetype = 2, size = 1, color = "grey") +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          axis.text.x = element_blank(),
+          axis.line.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.title.x = element_blank()) +
+    labs(fill = "Population")
+```
+
+
+### GRM off-diagonal values
+
+\* diagonal is set to NA so we can better see the range for off-diagonal (much smaller) values
+
+```{r, echo=FALSE}
+#GCTA
+grm_offdiag_gcta <- grm_df %>%
+  filter(grepl("^GCTA", method)) %>%
+    mutate(value = ifelse(id1 == id2, NA, value)) %>%
+    arrange(method, pop1, pop2, id1, id2) %>%
+    mutate(id1 = fct_inorder(id1),
+           id2 = fct_inorder(id2))
+
+lines_v_gcta <- grm_offdiag_gcta %>%
+    group_by(method, pop1) %>%
+    filter(1:n() == last(1:n())) %>%
+    ungroup() %>%
+    select(method, id1, pop1)
+
+lines_h_gcta <- grm_offdiag_gcta %>%
+    group_by(method, pop2) %>%
+    filter(1:n() == last(1:n())) %>%
+    ungroup() %>%
+    select(method, id2, pop2)
+
+labels_v_gcta <- grm_offdiag_gcta %>%
+    group_by(method, pop1) %>%
+    filter(1:n() == floor(median(1:n()))) %>%
+    ungroup() %>%
+    select(method, id1, pop1)
+
+labels_h_gcta <- grm_offdiag_gcta %>%
+    group_by(method, pop2) %>%
+    filter(1:n() == floor(median(1:n()))) %>%
+    ungroup() %>%
+    select(method, id2, pop2) %>%
+    filter(method == "GCTA with Geuvadis subset") %>%
+    select(id2, pop2)
+
+#Weir&Goudet
+grm_offdiag_wg <- grm_df %>%
+  filter(grepl("^Weir", method)) %>%
+    mutate(value = ifelse(id1 == id2, NA, value)) %>%
+    arrange(method, pop1, pop2, id1, id2) %>%
+    mutate(id1 = fct_inorder(id1),
+           id2 = fct_inorder(id2))
+
+lines_v_wg <- grm_offdiag_wg %>%
+    group_by(method, pop1) %>%
+    filter(1:n() == last(1:n())) %>%
+    ungroup() %>%
+    select(method, id1, pop1)
+
+lines_h_wg <- grm_offdiag_wg %>%
+    group_by(method, pop2) %>%
+    filter(1:n() == last(1:n())) %>%
+    ungroup() %>%
+    select(method, id2, pop2)
+
+labels_v_wg <- grm_offdiag_wg %>%
+    group_by(method, pop1) %>%
+    filter(1:n() == floor(median(1:n()))) %>%
+    ungroup() %>%
+    select(method, id1, pop1)
+
+labels_h_wg <- grm_offdiag_wg %>%
+    group_by(method, pop2) %>%
+    filter(1:n() == floor(median(1:n()))) %>%
+    ungroup() %>%
+    select(method, id2, pop2) %>%
+    filter(method == "Weir & Goudet with Geuvadis subset") %>%
+    select(id2, pop2)
+
+offdiag_gcta_p <- grm_offdiag_gcta %>%
+    ggplot() +
+    geom_tile(aes(id1, id2, fill = value)) +
+    scale_fill_gradient2(name = "GRM values", 
+                         breaks = seq(round(min(grm_offdiag_gcta$value, na.rm = TRUE), 2),
+                                      round(max(grm_offdiag_gcta$value, na.rm = TRUE), 2),
+                                      by = 0.02)) +
+    geom_hline(yintercept = lines_h_gcta$id2) +
+    geom_vline(xintercept = lines_v_gcta$id1) +
+    coord_cartesian(clip = "off") +
+    geom_text(data = labels_v_gcta, aes(x = id1, y = 0, label = pop1), 
+              vjust = 1.5) +
+    geom_text(data = labels_h_gcta, aes(y = id2, x = 0, label = pop2), 
+              vjust = -0.5, angle = 90) +
+    facet_wrap(~method, scales = "free") +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          panel.spacing = unit(1, "lines"),
+          axis.text = element_blank(),
+          axis.line = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          plot.margin = unit(c(1, 0, 1, 1), "lines"))
+
+offdiag_wg_p <- grm_offdiag_wg %>%
+    ggplot() +
+    geom_tile(aes(id1, id2, fill = value)) +
+    scale_fill_gradient2(name = "GRM values", 
+                         breaks = seq(round(min(grm_offdiag_wg$value, na.rm = TRUE), 2),
+                                      round(max(grm_offdiag_wg$value, na.rm = TRUE), 2),
+                                      by = 0.1)) +
+    geom_hline(yintercept = lines_h_wg$id2) +
+    geom_vline(xintercept = lines_v_wg$id1) +
+    coord_cartesian(clip = "off") +
+    geom_text(data = labels_v_wg, aes(x = id1, y = 0, label = pop1), 
+              vjust = 1.5) +
+    geom_text(data = labels_h_wg, aes(y = id2, x = 0, label = pop2), 
+              vjust = -0.5, angle = 90) +
+    facet_wrap(~method, scales = "free") +
+    theme_bw() +
+    theme(panel.grid = element_blank(),
+          panel.spacing = unit(1, "lines"),
+          axis.text = element_blank(),
+          axis.line = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          plot.margin = unit(c(1, 0, 1, 1), "lines"))
+
+plot_grid(offdiag_gcta_p, offdiag_wg_p, nrow = 2)
+```
+
+### Pairs of individuals
+
+```{r, echo=FALSE}
+tmp_df <- grm_df %>%
+  separate(method, c("method", "subset"), sep = " with ") %>%
+  pivot_wider(names_from = method, values_from = value) %>%
+  mutate(diag = ifelse(id1 == id2, "Diagonal", "Off-diagonal"),
+         granpop1 = ifelse(pop1 == "YRI", "EUR", "AFR"),
+         granpop2 = ifelse(pop2 == "YRI", "EUR", "AFR"),
+         finalpop1 = pmin(granpop1, granpop2),
+         finalpop2 = pmax(granpop1, granpop2)) %>%
+  unite(pop_pair, c("finalpop1", "finalpop2"), sep = "-") %>%
+  select(subset, id1, id2, diag, pop_pair, GCTA, `Weir & Goudet`)
+
+tmp_plot1 <- tmp_df %>%
+  filter(diag == "Diagonal") %>%
+  ggplot(aes(GCTA, `Weir & Goudet`)) +
+  geom_point(aes(color = pop_pair), alpha = .5) +
+  scale_color_manual(values = c("AFR-AFR" = "tomato3",
+                                "EUR-EUR" = "midnightblue")) +
+  facet_wrap(~subset, ncol = 1) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  labs(title = "Diagonal")
+
+tmp_plot2 <- tmp_df %>%
+  filter(diag == "Off-diagonal") %>%
+  ggplot(aes(GCTA, `Weir & Goudet`)) +
+  geom_point(aes(color = pop_pair), alpha = .5) +
+  scale_color_manual(values = c("AFR-AFR" = "tomato3",
+                                "AFR-EUR" = "goldenrod3",
+                                "EUR-EUR" = "midnightblue")) +
+  facet_wrap(~subset, ncol = 1) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  labs(title = "Off-diagonal")
+
+tmp_leg <- get_legend(tmp_plot2)
+
+plot_grid(tmp_plot1 + theme(legend.position = "none"),
+          tmp_plot2 + theme(legend.position = "none"),
+          tmp_leg, 
+          nrow = 1, rel_widths = c(1, 1, .33))
+```
+
+
+
+### Fitting the Null model
+
+The first step in finding genetic variants which are associated with a phenotype is preparing null model.
+
+We fit a null model which adjusts gene expression according to covariates such as population of origin, laboratory of sequencing, and sex. We also account for the relatedness between individuals (GRM).
+
+```{r}
+mod_null_gcta <- fitNullModel(annotphen,
+                        outcome = "value",
+                        covars = c("lab", "sex"),
+                        cov.mat = grm_gcta_geuv)
+```
+
+
+### Association testing
+
+Now that we have a Null model adjusting expression levels for sex, laboratory, population genetic structure, and relatedness, we can test for the association of the genetic variants with expression levels.
+
+The first step is to create a `SeqVarData` object including both the GDS (genotypes) and the Annotated data.frame (phenotypes). 
+
+Then we will use the `assocTestSingle` function to assess the effect of each variant.
+
+```{r, assocTest}
+# order individuals according to GDS
+gdsfmt::showfile.gds(closeall = TRUE)
+
+# it doesn't work if I use the GDS with all 1kgp individuals and filter for 
+# geuvadis
+pruned_geuv <- seqOpen("/raid/genevol/heritability/data/kgp/allchrs_pruned.gds")
+
+pData(annotphen) <- pData(annotphen) %>%
+    mutate(sampleid = factor(sampleid, levels = seqGetData(pruned_geuv, "sample.id"))) %>%
+    arrange(sampleid)
+
+# create SeqVarData object and iterator
+seqData <- SeqVarData(pruned_geuv, sampleData = annotphen)
+iterator <- SeqVarBlockIterator(seqData, variantBlock = 20000, verbose = FALSE)
+
+# test
+assoc <- assocTestSingle(iterator, mod_null_gcta)
+
+head(assoc, 10)
+```
+
+```{r, echo=FALSE}
+write_rds(assoc, "assocTest.rds")
+```
+
+
+
+### Heritability
+
+`GENESIS` includes the `varCompCI` to compute the proportion of variance explained (heritability) by each random effect, with a 95% CI: 
+
+```{r eval=FALSE}
+varCompCI(mod_null_wg, prop = TRUE)
+```
+
+
+## Session Information 
+
+```{r echo=FALSE}
+devtools::session_info()
+```
